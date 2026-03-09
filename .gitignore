@@ -1,0 +1,56 @@
+﻿# Build
+bin/
+obj/
+out/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# JetBrains Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# Test results
+TestResults/
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
+
+# Publish
+publish/
+
+# ASP.NET static lib restore
+wwwroot/lib/
+
+# dotnet watch
+.dotnet/
+
+# Local secrets
+secrets.json
+
+# Local appsettings
+appsettings.Development.json
+
+# Temporary
+*.tmp
+*.temp
