@@ -62,7 +62,7 @@ public static class RawReader
                 continue;
             }
 
-            if (!silent) Console.WriteLine($"  ✓  Reading {fileName}...");
+            //if (!silent) Console.WriteLine($"  ✓  Reading {fileName}...");
 
             // Open with FileShare.ReadWrite so the Collector can keep writing
             using var fs     = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
