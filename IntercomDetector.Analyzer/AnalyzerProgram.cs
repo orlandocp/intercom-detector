@@ -1,0 +1,62 @@
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+Console.WriteLine("═══════════════════════════════════════════════════════════════");
+Console.WriteLine("INTERCOM SIGNAL ANALYZER");
+Console.WriteLine("═══════════════════════════════════════════════════════════════");
+Console.WriteLine();
+
+// ── PHASE 1 — LOAD EVENTS ───────────────────────────────────────────────────
+Console.WriteLine("PHASE 1 — LOAD EVENTS");
+Console.WriteLine("───────────────────────────────────────────────────────────────");
+
+var events = EventLogReader.ReadAll();
+
+if (events.Count == 0)
+{
+    Console.WriteLine("No labeled events found. Label some events and try again.");
+    return;
+}
+
+// -- PRINT EVENT TABLE --
+Console.WriteLine();
+Console.WriteLine($"  {"TimeR",-15} {"DurMs",7} {"MaxV",6} {"Peaks",6} {"Peak1TimeR",-15} {"Peak1V",7}  {"Label"}");
+Console.WriteLine($"  {"───────────────────────────────────────────────────────────────────────────"}");
+foreach (var e in events)
+    Console.WriteLine($"  {e.TimeR,-15} {e.DurMs,7:F0} {e.MaxV,6:F2} {e.Peaks,6} {e.Peak1TimeR,-15} {e.Peak1V,7:F2}  {e.Label}");
+
+// -- PRINT SUMMARY --
+Console.WriteLine();
+int countR = events.Count(e => e.Label == "r");
+int countV = events.Count(e => e.Label == "v");
+int countC = events.Count(e => e.Label == "c");
+
+Console.WriteLine($"  Summary: {countR} r | {countV} v | {countC} c | {events.Count} total");
+
+if (countR < 5 || countV < 5 || countC < 5)
+{
+    Console.WriteLine();
+    Console.WriteLine("  ⚠️  At least 5 events of each type recommended for reliable analysis.");
+    if (countR < 5) Console.WriteLine($"     Missing {5 - countR} r events");
+    if (countV < 5) Console.WriteLine($"     Missing {5 - countV} v events");
+    if (countC < 5) Console.WriteLine($"     Missing {5 - countC} c events");
+}
+
+Console.WriteLine();
+
+// ── PHASE 2 — EXTRACT FEATURES FROM RAW ─────────────────────────────────────
+Console.WriteLine("PHASE 2 — EXTRACT FEATURES FROM RAW");
+Console.WriteLine("───────────────────────────────────────────────────────────────");
+
+var features = FeatureExtractor.Extract(events);
+
+Console.WriteLine();
+Console.WriteLine($"  {"TimeR",-15} {"RiseMs",8} {"DecayRate",10} {"AreaV",8} {"Label"}");
+Console.WriteLine($"  {"─────────────────────────────────────────────────────────"}");
+foreach (var f in features)
+    Console.WriteLine($"  {f.Event.TimeR,-15} {f.RiseTimeMs,8:F0} {f.DecayRate,10:F5} {f.AreaUnderCurve,8:F2}  {f.Event.Label}");
+
+Console.WriteLine();
+Console.WriteLine($"  Extracted {features.Count} feature sets ({features.Count(f => f.Event.Label == "r")} r | {features.Count(f => f.Event.Label == "v")} v | {features.Count(f => f.Event.Label == "c")} c)");
+
+Console.WriteLine();
+Console.WriteLine("═══════════════════════════════════════════════════════════════");
