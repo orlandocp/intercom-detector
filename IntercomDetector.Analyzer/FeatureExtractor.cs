@@ -50,18 +50,27 @@ public static class FeatureExtractor
 
     private static EventFeatures Compute(EventEntry e, List<RawSample> samples)
     {
+        // -- RESTING BASELINE (shared by OnsetRate and RiseRate) --
+        RawSample? restingSample = RawReader.FindLastRestingSample(e.Time, RestingThreshold);
+
+        // -- ONSET RATE --
+        // Earliest available feature: V/ms from last resting sample to first event sample
+        double onsetRate = 0;
+        if (restingSample != null && samples.Count > 0)
+        {
+            double dt = samples[0].TimestampMs - restingSample.TimestampMs;
+            if (dt > 0)
+                onsetRate = (samples[0].Voltage - restingSample.Voltage) / dt;
+        }
+
         // -- RISE TIME & RISE RATE --
-        // Find last resting sample before event start, measure time and rate to peak
+        // Time and rate from last resting sample to confirmed peak
         double riseTimeMs = 0;
         double riseRate   = 0;
-        if (e.Peak1Time > 0)
+        if (e.Peak1Time > 0 && restingSample != null)
         {
-            long lastRestingTs = RawReader.FindLastRestingTimestamp(e.Time, RestingThreshold);
-            if (lastRestingTs > 0)
-            {
-                riseTimeMs = e.Peak1Time - lastRestingTs;
-                riseRate   = riseTimeMs > 0 ? e.Peak1V / riseTimeMs : 0;
-            }
+            riseTimeMs = e.Peak1Time - restingSample.TimestampMs;
+            riseRate   = riseTimeMs > 0 ? (e.Peak1V - restingSample.Voltage) / riseTimeMs : 0;
         }
 
         // -- FIRST DROP RATE --
@@ -135,6 +144,19 @@ public static class FeatureExtractor
         double voltageAt50 = GetVoltageAtPercent(samples, e.Time, e.EndTime, 0.50);
         double voltageAt75 = GetVoltageAtPercent(samples, e.Time, e.EndTime, 0.75);
 
+        // -- AREA UNDER CURVE (first 1000ms) --
+        // Energy of the signal in the first second — available at e.Time + 1000ms
+        double areaEarly  = 0;
+        long   earlyLimit = e.Time + 1000;
+        for (int i = 1; i < samples.Count; i++)
+        {
+            if (samples[i].TimestampMs > earlyLimit) break;
+            double dt   = samples[i].TimestampMs - samples[i - 1].TimestampMs;
+            double avgV = (samples[i].Voltage + samples[i - 1].Voltage) / 2.0;
+            areaEarly += avgV * dt;
+        }
+        areaEarly /= 1000.0;
+
         // -- AREA UNDER CURVE --
         // Trapezoidal approximation normalized to V*seconds
         double area = 0;
@@ -148,19 +170,21 @@ public static class FeatureExtractor
 
         return new EventFeatures
         {
-            Event          = e,
-            RiseTimeMs     = riseTimeMs,
-            RiseRate       = riseRate,
-            FirstDropRate  = firstDropRate,
-            DecayRateEarly = decayRateEarly,
-            DecayRateMid   = decayRateMid,
-            DecayRateLate  = decayRateLate,
-            DecayRate      = decayRate,
-            VoltageAt25pct = voltageAt25,
-            VoltageAt50pct = voltageAt50,
-            VoltageAt75pct = voltageAt75,
-            AreaUnderCurve = area,
-            SampleCount    = samples.Count
+            Event                = e,
+            OnsetRate            = onsetRate,
+            RiseTimeMs           = riseTimeMs,
+            RiseRate             = riseRate,
+            FirstDropRate        = firstDropRate,
+            AreaUnderCurveEarly  = areaEarly,
+            DecayRateEarly       = decayRateEarly,
+            DecayRateMid         = decayRateMid,
+            DecayRateLate        = decayRateLate,
+            DecayRate            = decayRate,
+            VoltageAt25pct       = voltageAt25,
+            VoltageAt50pct       = voltageAt50,
+            VoltageAt75pct       = voltageAt75,
+            AreaUnderCurve       = area,
+            SampleCount          = samples.Count
         };
     }
 
@@ -203,11 +227,13 @@ public static class FeatureExtractor
 /// <summary>Computed signal features for a single event.</summary>
 public class EventFeatures
 {
-    public EventEntry Event          { get; init; } = null!;
-    public double     RiseTimeMs     { get; init; }
-    public double     RiseRate       { get; init; }
-    public double     FirstDropRate  { get; init; }
-    public double     DecayRateEarly { get; init; }
+    public EventEntry Event                { get; init; } = null!;
+    public double     OnsetRate            { get; init; }
+    public double     RiseTimeMs           { get; init; }
+    public double     RiseRate             { get; init; }
+    public double     FirstDropRate        { get; init; }
+    public double     AreaUnderCurveEarly  { get; init; }
+    public double     DecayRateEarly       { get; init; }
     public double     DecayRateMid   { get; init; }
     public double     DecayRateLate  { get; init; }
     public double     DecayRate      { get; init; }

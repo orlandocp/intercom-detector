@@ -47,12 +47,30 @@ Console.WriteLine();
 
 var features = FeatureExtractor.Extract(events);
 
-// Early detection features (available at peak + ~500ms)
-Console.WriteLine("  Early detection features (available at peak confirmation + ~500ms):");
+// Early detection features — first sample
+Console.WriteLine("  Early features — available at first sample:");
+Console.WriteLine($"  {"TimeR",-15} {"OnsetRate",11}  {"Label"}");
+Console.WriteLine($"  {"──────────────────────────────────────"}");
+foreach (var f in features)
+    Console.WriteLine($"  {f.Event.TimeR,-15} {f.OnsetRate,11:F6}  {f.Event.Label}");
+
+Console.WriteLine();
+
+// Early detection features — peak + 500ms
+Console.WriteLine("  Early features — available at peak confirmation + ~500ms:");
 Console.WriteLine($"  {"TimeR",-15} {"RiseMs",8} {"RiseRate",10} {"1stDropRate",12}  {"Label"}");
 Console.WriteLine($"  {"───────────────────────────────────────────────────────────────"}");
 foreach (var f in features)
     Console.WriteLine($"  {f.Event.TimeR,-15} {f.RiseTimeMs,8:F0} {f.RiseRate,10:F6} {f.FirstDropRate,12:F6}  {f.Event.Label}");
+
+Console.WriteLine();
+
+// Early detection features — peak + 1000ms
+Console.WriteLine("  Early features — available at peak confirmation + ~1000ms:");
+Console.WriteLine($"  {"TimeR",-15} {"AUC Early",10}  {"Label"}");
+Console.WriteLine($"  {"────────────────────────────────────────"}");
+foreach (var f in features)
+    Console.WriteLine($"  {f.Event.TimeR,-15} {f.AreaUnderCurveEarly,10:F4}  {f.Event.Label}");
 
 Console.WriteLine();
 

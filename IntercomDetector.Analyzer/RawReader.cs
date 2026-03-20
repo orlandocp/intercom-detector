@@ -26,11 +26,11 @@ public static class RawReader
     }
 
     /// <summary>
-    /// Finds the timestamp of the last resting sample (voltage below restingThreshold)
-    /// before eventStartTime by looking back up to LookbackMs in the raw data.
-    /// Returns 0 if no resting sample is found within the lookback window.
+    /// Finds the last resting sample (voltage below restingThreshold) before eventStartTime
+    /// by looking back up to LookbackMs in the raw data.
+    /// Returns null if no resting sample is found within the lookback window.
     /// </summary>
-    public static long FindLastRestingTimestamp(long eventStartTime, double restingThreshold = 0.3)
+    public static RawSample? FindLastRestingSample(long eventStartTime, double restingThreshold = 0.3)
     {
         var samples = ReadSamples(eventStartTime - LookbackMs, eventStartTime, silent: true);
 
@@ -38,10 +38,10 @@ public static class RawReader
         for (int i = samples.Count - 1; i >= 0; i--)
         {
             if (samples[i].Voltage < restingThreshold)
-                return samples[i].TimestampMs;
+                return samples[i];
         }
 
-        return 0;
+        return null;
     }
 
     private static List<RawSample> ReadSamples(long fromTime, long endTime, bool silent)

@@ -12,10 +12,10 @@
 public class EventTracker
 {
     // -- THRESHOLDS --
-    private const double EventStartThreshold = 0.5;    // voltage must cross above this to start event
-    private const double EventEndThreshold   = 0.3;    // voltage must drop below this to end event
-    private const double GapThresholdMs      = 1000;   // max gap between consecutive samples
-    private const double MaxEventDurationMs  = 50000;  // 50 seconds max event duration
+    private const double EventStartThreshold = 0.5;
+    private const double EventEndThreshold   = 0.3;
+    private const double GapThresholdMs      = 1000;
+    private const double MaxEventDurationMs  = 50000;
 
     // -- PATHS --
     private static readonly string CapturesFolder =
@@ -45,7 +45,6 @@ public class EventTracker
     public  double LastTimestampMs          = 0;
 
     // -- PUBLIC STATE --
-    /// <summary>Whether an event is currently being tracked.</summary>
     public bool IsEventActive => _eventActive;
 
     // -- LOCK --
@@ -56,9 +55,6 @@ public class EventTracker
         Directory.CreateDirectory(CapturesFolder);
     }
 
-    /// <summary>
-    /// Called once at server startup to recover any incomplete event from a previous crash.
-    /// </summary>
     public async Task RecoverAsync()
     {
         if (!File.Exists(ActiveEventPath)) return;
@@ -82,9 +78,6 @@ public class EventTracker
         }
     }
 
-    /// <summary>
-    /// Called when a connection reset is detected mid-request.
-    /// </summary>
     public async Task CloseConnectionResetAsync()
     {
         await _lock.WaitAsync();
@@ -101,10 +94,6 @@ public class EventTracker
         }
     }
 
-    /// <summary>
-    /// Processes a single raw sample through the event detection algorithm.
-    /// Returns true if the sample was valid and processed, false if discarded.
-    /// </summary>
     public async Task<bool> ProcessSampleAsync(double timestamp, double voltage, string timestampR)
     {
         await _lock.WaitAsync();
@@ -113,14 +102,17 @@ public class EventTracker
             // ── VALIDATE ORDER ───────────────────────────────────────────────
             if (LastTimestampMs > 0 && timestamp <= LastTimestampMs)
             {
+                // Convert expected timestamp to human readable for easier debugging
+                string expectedR = ToBoliviaTime(LastTimestampMs).ToString("HH:mm:ss.fff");
+
                 if (_eventActive)
                 {
-                    Console.WriteLine($"{timestampR} 💬 Out of order      | active event — closing INCONSISTENT_ORDER | expected > {LastTimestampMs} | got {timestamp}");
+                    Console.WriteLine($"{timestampR} 💬 Out of order       | active event — closing INCONSISTENT_ORDER | expected > {expectedR} | got {timestampR}");
                     await CloseInconsistentAsync(timestamp, timestampR, "INCONSISTENT_ORDER");
                 }
                 else
                 {
-                    Console.WriteLine($"{timestampR} 💬 Out of order      | resting state — discarded safely | expected > {LastTimestampMs} | got {timestamp}");
+                    Console.WriteLine($"{timestampR} 💬 Out of order       | resting state — discarded safely | expected > {expectedR} | got {timestampR}");
                 }
                 return false;
             }
@@ -160,7 +152,7 @@ public class EventTracker
 
                     await SaveActiveEventAsync(_eventStartTime, _eventStartTimeR);
 
-                    Console.WriteLine($"{timestampR} 🌟 Event started     | V: {voltage:F2}");
+                    Console.WriteLine($"{timestampR} 🌟 Event started      | V: {voltage:F2}");
                 }
             }
             else
@@ -173,6 +165,7 @@ public class EventTracker
                 // ── PEAK DETECTION ───────────────────────────────────────────
                 if (voltage > _prevVoltage)
                 {
+                    // Update first peak start time only while first peak not yet confirmed
                     if (_peakCount == 0)
                     {
                         _firstPeakStartTime  = timestamp;
@@ -181,6 +174,7 @@ public class EventTracker
                     _inPeak = true;
                 }
 
+                // Peak confirmed when voltage drops after a rise
                 if (_inPeak && voltage < _prevVoltage)
                 {
                     _peakCount++;
@@ -191,7 +185,7 @@ public class EventTracker
                         _peak1Voltage = _prevVoltage;
                     }
                     _inPeak = false;
-                    Console.WriteLine($"{_firstPeakStartTimeR} 📈 {"Peak #" + _peakCount,-18}| V: {_prevVoltage:F2}");
+                    Console.WriteLine($"{_firstPeakStartTimeR} 📈 {"Peak #" + _peakCount,-19}| V: {_prevVoltage:F2}");
                 }
 
                 _prevVoltage = voltage;
@@ -222,7 +216,7 @@ public class EventTracker
     private async Task CloseCompleteAsync(double endTime, string endTimeR)
     {
         double durMs = endTime - _eventStartTime;
-        Console.WriteLine($"{endTimeR} ✅ Event closed      | {durMs:F0}ms | peaks: {_peakCount} | maxV: {_maxVoltage:F2}");
+        Console.WriteLine($"{endTimeR} ✅ Event closed       | {durMs:F0}ms | peaks: {_peakCount} | maxV: {_maxVoltage:F2}");
 
         await WriteEventLogAsync(
             _eventStartTimeR, _eventStartTime,
@@ -317,8 +311,6 @@ public class EventTracker
         TimeZoneInfo.ConvertTime(
             DateTimeOffset.FromUnixTimeMilliseconds((long)timestampMs).UtcDateTime,
             TimeZoneInfo.Utc, BoliviaZone);
-
-    // -- INNER TYPES ----------------------------------------------------------
 
     private class ActiveEvent
     {

@@ -60,28 +60,50 @@ public static class RawEndpoint
             await _fileLock.WaitAsync();
             try
             {
-                int    validCount       = 0;
-                string firstSampleTimeR = "";
+                int    validCount        = 0;
+                int    discardedCount    = 0;
+                int    markerCount       = 0;
+                string firstSampleTimeR  = "";
+                string lastSampleTimeR   = "";
+                string firstRawTimeR     = "";  // first parseable timestamp regardless of validity
+
+                // -- PRE-SCAN: find first parseable timestamp for incoming log --
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
+                    if (!TryParseSample(line, out double ts, out _)) continue;
+                    firstRawTimeR = ToBoliviaTime(ts).ToString("HH:mm:ss.fff");
+                    break;
+                }
 
                 foreach (var line in lines)
                 {
                     // -- SKIP MARKERS --
-                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
+                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,"))
+                    {
+                        markerCount++;
+                        continue;
+                    }
 
                     // -- PARSE SAMPLE --
                     if (!TryParseSample(line, out double timestamp, out double voltage)) continue;
 
                     string timestampR = ToBoliviaTime(timestamp).ToString("HH:mm:ss.fff");
 
-                    // -- TRACK FIRST SAMPLE OF CHUNK --
-                    if (validCount == 0)
+                    // -- TRACK FIRST SAMPLE FOR PROCESSED LOG --
+                    if (validCount == 0 && discardedCount == 0)
                         firstSampleTimeR = timestampR;
 
                     // -- PROCESS THROUGH EVENT TRACKER --
                     bool isValid = await Tracker.ProcessSampleAsync(timestamp, voltage, timestampR);
-                    if (!isValid) continue;
+                    if (!isValid)
+                    {
+                        discardedCount++;
+                        continue;
+                    }
 
                     validCount++;
+                    lastSampleTimeR = timestampR;
 
                     // -- WRITE TO RAW CSV --
                     var filePath   = GetDailyFilePath(timestamp);
@@ -95,8 +117,9 @@ public static class RawEndpoint
                     await writer.WriteLineAsync($"{timestampR},{(long)timestamp},{voltage:F2}");
                 }
 
-                if (validCount > 0)
-                    Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk         | {validCount} samples");
+                // -- LOG PROCESSED CHUNK --
+                string discardedInfo = discardedCount > 0 ? $" | Discarded: {discardedCount}" : "";
+                Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | Samples: {validCount} | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
             }
             finally
             {
