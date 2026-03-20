@@ -185,7 +185,7 @@ public class EventTracker
                         _peak1Voltage = _prevVoltage;
                     }
                     _inPeak = false;
-                    Console.WriteLine($"{_firstPeakStartTimeR} 📈 {"Peak #" + _peakCount,-19}| V: {_prevVoltage:F2}");
+                    Console.WriteLine($"{timestampR} 📈 {"Peak #" + _peakCount,-19}| V: {_prevVoltage:F2}");
                 }
 
                 _prevVoltage = voltage;
