@@ -1,3 +1,5 @@
+using IntercomDetector.Core.Models;
+
 /// <summary>
 /// Reads raw CSV files and extracts samples within a given event time window.
 /// Also supports looking back before the event start to find the resting baseline.
@@ -101,5 +103,3 @@ public static class RawReader
     }
 }
 
-/// <summary>A single raw voltage sample with its timestamp.</summary>
-public record RawSample(long TimestampMs, double Voltage);

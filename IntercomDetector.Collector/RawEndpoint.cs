@@ -1,11 +1,9 @@
+using IntercomDetector.Core;
+using IntercomDetector.Core.Pipeline;
+
 /// <summary>
 /// Handles POST /raw — receives continuous raw voltage samples from the Shelly
-/// raw-capture script.
-///
-/// Responsibilities:
-///   - Validate sample order (discard out-of-order samples)
-///   - Write valid samples to the daily raw CSV
-///   - Delegate event detection to EventTracker
+/// raw-capture script and delegates to the SamplePipeline.
 /// </summary>
 public static class RawEndpoint
 {
@@ -13,21 +11,20 @@ public static class RawEndpoint
     private static readonly TimeZoneInfo BoliviaZone = TimeZoneInfo.CreateCustomTimeZone(
         "Bolivia", TimeSpan.FromHours(-4), "Bolivia", "Bolivia");
 
-    private static readonly string CapturesFolder =
-        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "captures");
+    private static SamplePipeline _pipeline = null!;
+    private static EventProcessor _eventProcessor = null!;
 
-    // Single EventTracker instance shared across all requests
-    private static readonly EventTracker Tracker = new EventTracker();
+    // Lock to serialize chunks through the pipeline
+    private static readonly SemaphoreSlim _chunkLock = new(1, 1);
 
-    // Lock to prevent concurrent writes to the raw CSV
-    private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
+    // Last accepted timestamp for global order validation
+    private static long _lastTimestampMs = 0;
 
-    /// <summary>
-    /// Called once at server startup to recover any incomplete event from a crash.
-    /// </summary>
-    public static async Task InitAsync()
+    public static async Task InitAsync(SamplePipeline pipeline, EventProcessor eventProcessor)
     {
-        await Tracker.RecoverAsync();
+        _pipeline       = pipeline;
+        _eventProcessor = eventProcessor;
+        await eventProcessor.RecoverAsync();
     }
 
     public static void Register(WebApplication app)
@@ -45,8 +42,8 @@ public static class RawEndpoint
                                        ex is Microsoft.AspNetCore.Connections.ConnectionResetException)
             {
                 Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} ⚡ Connection reset  | chunk lost");
-                if (Tracker.IsEventActive)
-                    await Tracker.CloseConnectionResetAsync();
+                if (_eventProcessor.IsEventActive)
+                    await _eventProcessor.CloseConnectionResetAsync();
                 return;
             }
 
@@ -57,100 +54,78 @@ public static class RawEndpoint
 
             if (lines.Length == 0) return;
 
-            await _fileLock.WaitAsync();
+            await _chunkLock.WaitAsync();
             try
             {
-                int    validCount        = 0;
-                int    discardedCount    = 0;
-                int    markerCount       = 0;
-                string firstSampleTimeR  = "";
-                string lastSampleTimeR   = "";
-                string firstRawTimeR     = "";  // first parseable timestamp regardless of validity
+                int    validCount       = 0;
+                int    discardedCount   = 0;
+                string firstSampleTimeR = "";
+                string lastSampleTimeR  = "";
 
-                // -- PRE-SCAN: find first parseable timestamp for incoming log --
+                // -- PRE-SCAN: find first parseable timestamp for log --
+                string firstRawTimeR = "";
                 foreach (var line in lines)
                 {
                     if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
-                    if (!TryParseSample(line, out double ts, out _)) continue;
+                    if (!TryParseSample(line, out long ts, out _)) continue;
                     firstRawTimeR = ToBoliviaTime(ts).ToString("HH:mm:ss.fff");
                     break;
                 }
 
+                Console.WriteLine($"{firstRawTimeR} 📡 Raw chunk incoming | {lines.Length} lines");
+
                 foreach (var line in lines)
                 {
-                    // -- SKIP MARKERS --
-                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,"))
-                    {
-                        markerCount++;
-                        continue;
-                    }
+                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
+                    if (!TryParseSample(line, out long timestampMs, out double voltage)) continue;
 
-                    // -- PARSE SAMPLE --
-                    if (!TryParseSample(line, out double timestamp, out double voltage)) continue;
+                    string timeR = ToBoliviaTime(timestampMs).ToString("HH:mm:ss.fff");
 
-                    string timestampR = ToBoliviaTime(timestamp).ToString("HH:mm:ss.fff");
-
-                    // -- TRACK FIRST SAMPLE FOR PROCESSED LOG --
                     if (validCount == 0 && discardedCount == 0)
-                        firstSampleTimeR = timestampR;
+                        firstSampleTimeR = timeR;
 
-                    // -- PROCESS THROUGH EVENT TRACKER --
-                    bool isValid = await Tracker.ProcessSampleAsync(timestamp, voltage, timestampR);
-                    if (!isValid)
+                    // Order check (pipeline processors do their own checks; we track here
+                    // to maintain the global last-seen timestamp before routing)
+                    if (_lastTimestampMs > 0 && timestampMs <= _lastTimestampMs)
                     {
                         discardedCount++;
                         continue;
                     }
 
+                    _lastTimestampMs = timestampMs;
                     validCount++;
-                    lastSampleTimeR = timestampR;
+                    lastSampleTimeR = timeR;
 
-                    // -- WRITE TO RAW CSV --
-                    var filePath   = GetDailyFilePath(timestamp);
-                    bool fileExists = File.Exists(filePath);
-
-                    await using var writer = new StreamWriter(filePath, append: true);
-
-                    if (!fileExists)
-                        await writer.WriteLineAsync("TimeR,Time,Voltage");
-
-                    await writer.WriteLineAsync($"{timestampR},{(long)timestamp},{voltage:F2}");
+                    await _pipeline.ProcessAsync(timestampMs, voltage, timeR);
                 }
 
-                // -- LOG PROCESSED CHUNK --
                 string discardedInfo = discardedCount > 0 ? $" | Discarded: {discardedCount}" : "";
                 Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | Samples: {validCount} | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
             }
             finally
             {
-                _fileLock.Release();
+                _chunkLock.Release();
             }
         });
     }
 
     // -- HELPERS --
 
-    private static string GetDailyFilePath(double timestampMs)
-    {
-        Directory.CreateDirectory(CapturesFolder);
-        string date = ToBoliviaTime(timestampMs).ToString("yyyyMMdd");
-        return Path.Combine(CapturesFolder, $"raw_{date}.csv");
-    }
-
-    private static bool TryParseSample(string line, out double timestampMs, out double voltage)
+    private static bool TryParseSample(string line, out long timestampMs, out double voltage)
     {
         timestampMs = 0; voltage = 0;
         var parts = line.Split(',');
         if (parts.Length < 2) return false;
         if (!double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out timestampMs)) return false;
+                System.Globalization.CultureInfo.InvariantCulture, out double tsDouble)) return false;
         if (!double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out voltage)) return false;
+        timestampMs = (long)tsDouble;
         return true;
     }
 
-    private static DateTime ToBoliviaTime(double timestampMs) =>
+    private static DateTime ToBoliviaTime(long timestampMs) =>
         TimeZoneInfo.ConvertTime(
-            DateTimeOffset.FromUnixTimeMilliseconds((long)timestampMs).UtcDateTime,
+            DateTimeOffset.FromUnixTimeMilliseconds(timestampMs).UtcDateTime,
             TimeZoneInfo.Utc, BoliviaZone);
 }

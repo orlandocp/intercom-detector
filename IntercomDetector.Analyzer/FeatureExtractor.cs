@@ -1,3 +1,5 @@
+using IntercomDetector.Core.Models;
+
 /// <summary>
 /// Extracts signal processing features from raw samples for each labeled event.
 ///
