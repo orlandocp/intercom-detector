@@ -14,10 +14,10 @@ namespace IntercomDetector.Core.Pipeline;
 public class EventProcessor : ISampleProcessor
 {
     // -- THRESHOLDS --
-    private const double EventStartThreshold = 0.5;
-    private const double EventEndThreshold   = 0.3;
-    private const double GapThresholdMs      = 1000;
-    private const double MaxEventDurationMs  = 50000;
+    private readonly double EventStartThreshold;
+    private readonly double EventEndThreshold;
+    private readonly double GapThresholdMs;
+    private readonly double MaxEventDurationMs;
 
     // -- TIMEZONE --
     private static readonly TimeZoneInfo BoliviaZone = TimeZoneInfo.CreateCustomTimeZone(
@@ -60,11 +60,22 @@ public class EventProcessor : ISampleProcessor
     // -- LOCK --
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public EventProcessor(string capturesFolder)
+    // Tracks which event_log files already received a #config line in this session
+    private readonly HashSet<string> _configWrittenFiles = new();
+
+    public EventProcessor(string capturesFolder,
+        double eventStartThreshold = 0.5,
+        double eventEndThreshold   = 0.3,
+        double gapThresholdMs      = 1000,
+        double maxEventDurationMs  = 50000)
     {
-        _capturesFolder  = capturesFolder;
-        _activeEventPath = Path.Combine(capturesFolder, "active_event.json");
-        _fileWriter      = new EventFileWriter(capturesFolder);
+        EventStartThreshold = eventStartThreshold;
+        EventEndThreshold   = eventEndThreshold;
+        GapThresholdMs      = gapThresholdMs;
+        MaxEventDurationMs  = maxEventDurationMs;
+        _capturesFolder     = capturesFolder;
+        _activeEventPath    = Path.Combine(capturesFolder, "active_event.json");
+        _fileWriter         = new EventFileWriter(capturesFolder);
         Directory.CreateDirectory(capturesFolder);
     }
 
@@ -301,13 +312,21 @@ public class EventProcessor : ISampleProcessor
         long peak1Time, string peak1TimeR, double peak1V,
         string status)
     {
-        var filePath  = GetEventLogPath(time);
-        bool fileExists = File.Exists(filePath);
+        var filePath     = GetEventLogPath(time);
+        bool fileExists  = File.Exists(filePath);
+        bool configSeen  = _configWrittenFiles.Contains(filePath);
 
         await using var writer = new StreamWriter(filePath, append: true);
 
         if (!fileExists)
             await writer.WriteLineAsync("TimeR,DurMs,EndTimeR,Time,EndTime,Peaks,MaxV,Peak1Time,Peak1TimeR,Peak1V,Status,Label");
+
+        if (!configSeen)
+        {
+            await writer.WriteLineAsync(
+                $"#config: EventStartV={EventStartThreshold} EventEndV={EventEndThreshold} GapMs={GapThresholdMs} MaxDurMs={MaxEventDurationMs}");
+            _configWrittenFiles.Add(filePath);
+        }
 
         await writer.WriteLineAsync(
             $"{timeR},{durMs,5:F0},{endTimeR},{time}," +

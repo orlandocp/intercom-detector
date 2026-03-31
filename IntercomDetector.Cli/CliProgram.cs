@@ -16,11 +16,19 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
 string subcommand = args[0].ToLowerInvariant();
 string inputPattern = "";
 string outputFolder = "";
+double eventStartV  = 0.5;
+double eventEndV    = 0.3;
+double gapMs        = 1000;
+double maxDurMs     = 50000;
 
 for (int i = 1; i < args.Length; i++)
 {
-    if (args[i] == "--input"  && i + 1 < args.Length) { inputPattern = args[++i]; continue; }
-    if (args[i] == "--output" && i + 1 < args.Length) { outputFolder = args[++i]; continue; }
+    if (args[i] == "--input"       && i + 1 < args.Length) { inputPattern = args[++i]; continue; }
+    if (args[i] == "--output"      && i + 1 < args.Length) { outputFolder = args[++i]; continue; }
+    if (args[i] == "--event-start" && i + 1 < args.Length) { eventStartV  = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if (args[i] == "--event-end"   && i + 1 < args.Length) { eventEndV    = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if (args[i] == "--gap"         && i + 1 < args.Length) { gapMs        = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if (args[i] == "--max-dur"     && i + 1 < args.Length) { maxDurMs     = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
 }
 
 if (string.IsNullOrWhiteSpace(inputPattern))
@@ -63,7 +71,7 @@ else if (!Path.IsPathRooted(outputFolder))
 Directory.CreateDirectory(outputFolder);
 
 // -- BUILD PIPELINE --
-var processors = BuildProcessors(subcommand, outputFolder);
+var processors = BuildProcessors(subcommand, outputFolder, eventStartV, eventEndV, gapMs, maxDurMs);
 var pipeline   = new SamplePipeline(processors);
 
 Console.WriteLine($"▶ Subcommand : {subcommand}");
@@ -83,7 +91,8 @@ Console.WriteLine("✅ Done.");
 
 // =============================================================================
 
-static List<ISampleProcessor> BuildProcessors(string subcommand, string capturesFolder)
+static List<ISampleProcessor> BuildProcessors(string subcommand, string capturesFolder,
+    double eventStartV, double eventEndV, double gapMs, double maxDurMs)
 {
     var list = new List<ISampleProcessor>();
 
@@ -91,7 +100,7 @@ static List<ISampleProcessor> BuildProcessors(string subcommand, string captures
         list.Add(new RawWriter(capturesFolder));
 
     if (subcommand is "events" or "all")
-        list.Add(new EventProcessor(capturesFolder));
+        list.Add(new EventProcessor(capturesFolder, eventStartV, eventEndV, gapMs, maxDurMs));
 
     if (subcommand is "rest" or "all")
         list.Add(new RestWriter(capturesFolder));
@@ -156,6 +165,7 @@ static List<string> ResolveInputFiles(string pattern)
 static void PrintUsage()
 {
     Console.WriteLine("Usage: IntercomDetector.Cli <subcommand> --input <file-or-glob> [--output <folder>]");
+    Console.WriteLine("                            [--event-start <V>] [--event-end <V>] [--gap <ms>] [--max-dur <ms>]");
     Console.WriteLine();
     Console.WriteLine("Subcommands:");
     Console.WriteLine("  raw    — regenerate raw_yyyyMMdd.csv from input");
@@ -163,10 +173,17 @@ static void PrintUsage()
     Console.WriteLine("  rest   — regenerate rest_yyyyMMdd.csv from input");
     Console.WriteLine("  all    — regenerate all output types");
     Console.WriteLine();
+    Console.WriteLine("Threshold options (defaults: --event-start 0.5 --event-end 0.3 --gap 1000 --max-dur 50000):");
+    Console.WriteLine("  --event-start <V>   voltage to open an event (default: 0.5)");
+    Console.WriteLine("  --event-end   <V>   voltage to close an event (default: 0.3)");
+    Console.WriteLine("  --gap         <ms>  gap that forces INCONSISTENT_GAP close (default: 1000)");
+    Console.WriteLine("  --max-dur     <ms>  max event duration before INCONSISTENT_TIMEOUT (default: 50000)");
+    Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- all    --input captures/raw_20260321.csv");
     Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- rest   --input captures/raw_20260321.csv");
     Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input \"captures/raw_*.csv\"");
+    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/raw_20260321.csv --event-start 0.4 --gap 800");
 }
 
 // Extension helper

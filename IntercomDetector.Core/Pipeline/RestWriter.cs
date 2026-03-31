@@ -2,8 +2,9 @@ namespace IntercomDetector.Core.Pipeline;
 
 /// <summary>
 /// R3 — Writes every sample with voltage &lt; 0.3V to the daily rest_yyyyMMdd.csv file.
+/// Keeps the StreamWriter open across samples to avoid per-call file open/close overhead.
 /// </summary>
-public class RestWriter : ISampleProcessor
+public class RestWriter : ISampleProcessor, IAsyncDisposable
 {
     private const double RestThreshold = 0.3;
 
@@ -12,6 +13,9 @@ public class RestWriter : ISampleProcessor
 
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly string _capturesFolder;
+
+    private StreamWriter? _writer;
+    private string? _currentDate;
 
     public RestWriter(string capturesFolder)
     {
@@ -26,15 +30,10 @@ public class RestWriter : ISampleProcessor
         await _lock.WaitAsync();
         try
         {
-            var filePath  = GetDailyFilePath(timestampMs);
-            bool fileExists = File.Exists(filePath);
-
-            await using var writer = new StreamWriter(filePath, append: true);
-
-            if (!fileExists)
-                await writer.WriteLineAsync("TimeR,Time,Voltage");
-
-            await writer.WriteLineAsync($"{timeR},{timestampMs},{voltage:F2}");
+            string date = ToBoliviaTime(timestampMs).ToString("yyyyMMdd");
+            await EnsureWriterAsync(date);
+            await _writer!.WriteLineAsync($"{timeR},{timestampMs},{voltage:F2}");
+            await _writer.FlushAsync();
         }
         finally
         {
@@ -42,10 +41,35 @@ public class RestWriter : ISampleProcessor
         }
     }
 
-    private string GetDailyFilePath(long timestampMs)
+    private async Task EnsureWriterAsync(string date)
     {
-        string date = ToBoliviaTime(timestampMs).ToString("yyyyMMdd");
-        return Path.Combine(_capturesFolder, $"rest_{date}.csv");
+        if (_currentDate == date) return;
+
+        if (_writer != null)
+            await _writer.DisposeAsync();
+
+        string filePath = Path.Combine(_capturesFolder, $"rest_{date}.csv");
+        bool fileExists = File.Exists(filePath);
+
+        _writer = new StreamWriter(filePath, append: true);
+        _currentDate = date;
+
+        if (!fileExists)
+            await _writer.WriteLineAsync("TimeR,Time,Voltage");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            if (_writer != null)
+                await _writer.DisposeAsync();
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     private static DateTime ToBoliviaTime(long timestampMs) =>

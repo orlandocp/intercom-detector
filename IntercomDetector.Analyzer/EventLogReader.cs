@@ -46,6 +46,7 @@ public static class EventLogReader
         foreach (var line in lines.Skip(1)) // skip header
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.StartsWith('#')) continue; // skip #config: session markers
 
             var entry = TryParse(line);
             if (entry == null) { skipped++; continue; }

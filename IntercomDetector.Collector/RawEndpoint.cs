@@ -62,18 +62,6 @@ public static class RawEndpoint
                 string firstSampleTimeR = "";
                 string lastSampleTimeR  = "";
 
-                // -- PRE-SCAN: find first parseable timestamp for log --
-                string firstRawTimeR = "";
-                foreach (var line in lines)
-                {
-                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
-                    if (!TryParseSample(line, out long ts, out _)) continue;
-                    firstRawTimeR = ToBoliviaTime(ts).ToString("HH:mm:ss.fff");
-                    break;
-                }
-
-                Console.WriteLine($"{firstRawTimeR} 📡 Raw chunk incoming | {lines.Length} lines");
-
                 foreach (var line in lines)
                 {
                     if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
@@ -100,7 +88,7 @@ public static class RawEndpoint
                 }
 
                 string discardedInfo = discardedCount > 0 ? $" | Discarded: {discardedCount}" : "";
-                Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | Samples: {validCount} | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
+                Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | {validCount + discardedCount} lines | {validCount} valid | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
             }
             finally
             {
