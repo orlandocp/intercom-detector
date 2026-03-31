@@ -73,8 +73,7 @@ public static class RawReader
             string? line;
             while ((line = reader.ReadLine()) != null)
             {
-                if (line.StartsWith("TimeR") || line.StartsWith("RESTART") ||
-                    line.StartsWith("GAP")   || string.IsNullOrWhiteSpace(line)) continue;
+                if (line.StartsWith("TimeR") || string.IsNullOrWhiteSpace(line)) continue;
 
                 var parts = line.Split(',');
                 if (parts.Length < 3) continue;

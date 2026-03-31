@@ -120,7 +120,7 @@ static async Task ProcessRawFileAsync(string filePath, SamplePipeline pipeline)
     while ((line = reader.ReadLine()) != null)
     {
         if (string.IsNullOrWhiteSpace(line)) continue;
-        if (line.StartsWith("TimeR") || line.StartsWith("RESTART") || line.StartsWith("GAP"))
+        if (line.StartsWith("TimeR"))
             continue;
 
         var parts = line.Split(',');

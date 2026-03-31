@@ -64,7 +64,6 @@ public static class RawEndpoint
 
                 foreach (var line in lines)
                 {
-                    if (line.StartsWith("RESTART,") || line.StartsWith("GAP,")) continue;
                     if (!TryParseSample(line, out long timestampMs, out double voltage)) continue;
 
                     string timeR = ToBoliviaTime(timestampMs).ToString("HH:mm:ss.fff");
@@ -88,7 +87,7 @@ public static class RawEndpoint
                 }
 
                 string discardedInfo = discardedCount > 0 ? $" | Discarded: {discardedCount}" : "";
-                Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | {validCount + discardedCount} lines | {validCount} valid | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
+                Console.WriteLine($"{firstSampleTimeR} 📡 Raw chunk          | {lines.Length} lines | {validCount} valid | {firstSampleTimeR}-{lastSampleTimeR}{discardedInfo}");
             }
             finally
             {
