@@ -63,6 +63,9 @@ public class EventProcessor : ISampleProcessor
     // Tracks which event_log files already received a #config line in this session
     private readonly HashSet<string> _configWrittenFiles = new();
 
+    // Event counts by status for end-of-session summary
+    private readonly Dictionary<string, int> _eventCounts = new();
+
     public EventProcessor(string capturesFolder,
         double eventStartThreshold = 0.5,
         double eventEndThreshold   = 0.3,
@@ -328,11 +331,32 @@ public class EventProcessor : ISampleProcessor
             _configWrittenFiles.Add(filePath);
         }
 
+        _eventCounts.TryGetValue(status, out int prev);
+        _eventCounts[status] = prev + 1;
+
         await writer.WriteLineAsync(
             $"{timeR},{durMs,5:F0},{endTimeR},{time}," +
             $"{endTime},{peaks},{maxV:F2}," +
             $"{peak1Time},{peak1TimeR},{peak1V:F2}," +
             $"{status},");
+    }
+
+    public void PrintSummary()
+    {
+        var nowR = ToBoliviaTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ToString("HH:mm:ss.fff");
+        Console.WriteLine($"{nowR} 📊 Summary            | output: {_capturesFolder}");
+        Console.WriteLine($"{nowR} 📊 Summary            | config: EventStartV={EventStartThreshold} EventEndV={EventEndThreshold} GapMs={GapThresholdMs} MaxDurMs={MaxEventDurationMs}");
+        if (_eventCounts.Count == 0)
+        {
+            Console.WriteLine($"{nowR} 📊 Summary            | events: none");
+        }
+        else
+        {
+            int total = _eventCounts.Values.Sum();
+            Console.WriteLine($"{nowR} 📊 Summary            | events: {total} total");
+            foreach (var (s, count) in _eventCounts.OrderByDescending(x => x.Value))
+                Console.WriteLine($"{nowR} 📊 Summary            |   {count,3}  {s}");
+        }
     }
 
     private string GetEventLogPath(long timestampMs)

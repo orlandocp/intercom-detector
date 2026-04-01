@@ -25,6 +25,10 @@ var pendingEvents = new ConcurrentDictionary<string, ConcurrentBag<string>>();
 // -- INIT --
 await RawEndpoint.InitAsync(pipeline, eventProcessor);
 
+// -- SHUTDOWN SUMMARY --
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+lifetime.ApplicationStopping.Register(() => eventProcessor.PrintSummary());
+
 // -- ENDPOINTS --
 BufferEndpoint.Register(app, pendingEvents);
 RawEndpoint.Register(app);

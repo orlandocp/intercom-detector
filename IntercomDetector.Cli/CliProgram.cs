@@ -87,6 +87,9 @@ foreach (var filePath in inputFiles)
     Console.WriteLine();
 }
 
+if (processors.OfType<EventProcessor>().FirstOrDefault() is { } ep)
+    ep.PrintSummary();
+
 Console.WriteLine("✅ Done.");
 
 // =============================================================================
