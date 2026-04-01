@@ -3,13 +3,14 @@ namespace IntercomDetector.Core.Pipeline;
 /// <summary>
 /// R1 — Writes every valid sample to the daily raw_yyyyMMdd.csv file.
 /// </summary>
-public class RawWriter : ISampleProcessor
+public class RawWriter : ISampleProcessor, ISummaryProvider
 {
     private static readonly TimeZoneInfo BoliviaZone = TimeZoneInfo.CreateCustomTimeZone(
         "Bolivia", TimeSpan.FromHours(-4), "Bolivia", "Bolivia");
 
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private string _capturesFolder;
+    private readonly string _capturesFolder;
+    private int _samplesWritten = 0;
 
     public RawWriter(string capturesFolder)
     {
@@ -31,11 +32,19 @@ public class RawWriter : ISampleProcessor
                 await writer.WriteLineAsync("TimeR,Time,Voltage");
 
             await writer.WriteLineAsync($"{timeR},{timestampMs},{voltage:F2}");
+            _samplesWritten++;
         }
         finally
         {
             _lock.Release();
         }
+    }
+
+    public void PrintSummary()
+    {
+        var nowR = ToBoliviaTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ToString("HH:mm:ss.fff");
+        Console.WriteLine($"{nowR} 📊 Summary            | output : {_capturesFolder}");
+        Console.WriteLine($"{nowR} 📊 Summary            | samples: {_samplesWritten}");
     }
 
     private string GetDailyFilePath(long timestampMs)

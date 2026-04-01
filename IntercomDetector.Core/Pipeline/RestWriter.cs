@@ -1,12 +1,12 @@
 namespace IntercomDetector.Core.Pipeline;
 
 /// <summary>
-/// R3 — Writes every sample with voltage &lt; 0.3V to the daily rest_yyyyMMdd.csv file.
+/// R3 — Writes every sample with voltage below restThreshold to the daily rest_yyyyMMdd.csv file.
 /// Keeps the StreamWriter open across samples to avoid per-call file open/close overhead.
 /// </summary>
-public class RestWriter : ISampleProcessor, IAsyncDisposable
+public class RestWriter : ISampleProcessor, ISummaryProvider, IAsyncDisposable
 {
-    private const double RestThreshold = 0.3;
+    private readonly double _restThreshold;
 
     private static readonly TimeZoneInfo BoliviaZone = TimeZoneInfo.CreateCustomTimeZone(
         "Bolivia", TimeSpan.FromHours(-4), "Bolivia", "Bolivia");
@@ -17,15 +17,20 @@ public class RestWriter : ISampleProcessor, IAsyncDisposable
     private StreamWriter? _writer;
     private string? _currentDate;
 
-    public RestWriter(string capturesFolder)
+    // Tracks which dates already received a #config line in this session
+    private readonly HashSet<string> _configWrittenDates = new();
+    private int _samplesWritten = 0;
+
+    public RestWriter(string capturesFolder, double restThreshold = 0.3)
     {
+        _restThreshold  = restThreshold;
         _capturesFolder = capturesFolder;
         Directory.CreateDirectory(capturesFolder);
     }
 
     public async Task ProcessSampleAsync(long timestampMs, double voltage, string timeR)
     {
-        if (voltage >= RestThreshold) return;
+        if (voltage >= _restThreshold) return;
 
         await _lock.WaitAsync();
         try
@@ -34,6 +39,7 @@ public class RestWriter : ISampleProcessor, IAsyncDisposable
             await EnsureWriterAsync(date);
             await _writer!.WriteLineAsync($"{timeR},{timestampMs},{voltage:F2}");
             await _writer.FlushAsync();
+            _samplesWritten++;
         }
         finally
         {
@@ -56,6 +62,20 @@ public class RestWriter : ISampleProcessor, IAsyncDisposable
 
         if (!fileExists)
             await _writer.WriteLineAsync("TimeR,Time,Voltage");
+
+        if (!_configWrittenDates.Contains(date))
+        {
+            await _writer.WriteLineAsync($"#config: RestThreshold={_restThreshold}");
+            _configWrittenDates.Add(date);
+        }
+    }
+
+    public void PrintSummary()
+    {
+        var nowR = ToBoliviaTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ToString("HH:mm:ss.fff");
+        Console.WriteLine($"{nowR} 📊 Summary            | output : {_capturesFolder}");
+        Console.WriteLine($"{nowR} 📊 Summary            | config : RestThreshold={_restThreshold}");
+        Console.WriteLine($"{nowR} 📊 Summary            | samples: {_samplesWritten}");
     }
 
     public async ValueTask DisposeAsync()

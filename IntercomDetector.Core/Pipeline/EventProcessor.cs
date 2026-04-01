@@ -11,7 +11,7 @@ namespace IntercomDetector.Core.Pipeline;
 ///   - Persist active event state to active_event.json for crash recovery
 ///   - Collect per-event samples and invoke EventFileWriter for COMPLETE events
 /// </summary>
-public class EventProcessor : ISampleProcessor
+public class EventProcessor : ISampleProcessor, ISummaryProvider
 {
     // -- THRESHOLDS --
     private readonly double EventStartThreshold;

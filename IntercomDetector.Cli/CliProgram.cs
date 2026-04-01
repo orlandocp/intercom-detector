@@ -87,8 +87,8 @@ foreach (var filePath in inputFiles)
     Console.WriteLine();
 }
 
-if (processors.OfType<EventProcessor>().FirstOrDefault() is { } ep)
-    ep.PrintSummary();
+foreach (var p in processors.OfType<ISummaryProvider>())
+    p.PrintSummary();
 
 Console.WriteLine("✅ Done.");
 
@@ -106,7 +106,7 @@ static List<ISampleProcessor> BuildProcessors(string subcommand, string captures
         list.Add(new EventProcessor(capturesFolder, eventStartV, eventEndV, gapMs, maxDurMs));
 
     if (subcommand is "rest" or "all")
-        list.Add(new RestWriter(capturesFolder));
+        list.Add(new RestWriter(capturesFolder, eventEndV));
 
     return list;
 }
@@ -147,11 +147,17 @@ static async Task ProcessRawFileAsync(string filePath, SamplePipeline pipeline)
 
 static List<string> ResolveInputFiles(string pattern)
 {
-    // If pattern contains wildcards, use glob expansion
+    // Folder path — find all raw_*.csv inside
+    if (Directory.Exists(pattern))
+        return Directory.GetFiles(pattern, "raw_*.csv")
+                        .OrderBy(f => f)
+                        .ToList();
+
+    // Wildcard glob
     if (pattern.Contains('*') || pattern.Contains('?'))
     {
-        string dir       = Path.GetDirectoryName(pattern) is { Length: > 0 } d ? d : Directory.GetCurrentDirectory();
-        string fileGlob  = Path.GetFileName(pattern);
+        string dir      = Path.GetDirectoryName(pattern) is { Length: > 0 } d ? d : Directory.GetCurrentDirectory();
+        string fileGlob = Path.GetFileName(pattern);
         if (!Directory.Exists(dir)) return new List<string>();
         return Directory.GetFiles(dir, fileGlob)
                         .OrderBy(f => f)
@@ -167,7 +173,7 @@ static List<string> ResolveInputFiles(string pattern)
 
 static void PrintUsage()
 {
-    Console.WriteLine("Usage: IntercomDetector.Cli <subcommand> --input <file-or-glob> [--output <folder>]");
+    Console.WriteLine("Usage: IntercomDetector.Cli <subcommand> --input <folder|file|glob> [--output <folder>]");
     Console.WriteLine("                            [--event-start <V>] [--event-end <V>] [--gap <ms>] [--max-dur <ms>]");
     Console.WriteLine();
     Console.WriteLine("Subcommands:");
@@ -183,10 +189,10 @@ static void PrintUsage()
     Console.WriteLine("  --max-dur     <ms>  max event duration before INCONSISTENT_TIMEOUT (default: 50000)");
     Console.WriteLine();
     Console.WriteLine("Examples:");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- all    --input captures/raw_20260321.csv");
+    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- all    --input captures/");
+    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/");
     Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- rest   --input captures/raw_20260321.csv");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input \"captures/raw_*.csv\"");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/raw_20260321.csv --event-start 0.4 --gap 800");
+    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/ --event-start 0.4 --gap 800");
 }
 
 // Extension helper
