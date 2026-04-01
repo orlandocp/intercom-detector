@@ -182,11 +182,11 @@ static void PrintUsage()
     Console.WriteLine("  rest   — regenerate rest_yyyyMMdd.csv from input");
     Console.WriteLine("  all    — regenerate all output types");
     Console.WriteLine();
-    Console.WriteLine("Threshold options (defaults: --event-start 0.5 --event-end 0.3 --gap 1000 --max-dur 50000):");
-    Console.WriteLine("  --event-start <V>   voltage to open an event (default: 0.5)");
-    Console.WriteLine("  --event-end   <V>   voltage to close an event (default: 0.3)");
-    Console.WriteLine("  --gap         <ms>  gap that forces INCONSISTENT_GAP close (default: 1000)");
-    Console.WriteLine("  --max-dur     <ms>  max event duration before INCONSISTENT_TIMEOUT (default: 50000)");
+    Console.WriteLine("Threshold options:");
+    Console.WriteLine("  --event-start <V>   open event when voltage >= V  (default: 0.5)");
+    Console.WriteLine("  --event-end   <V>   close event when voltage < V  (default: 0.3) — also sets rest threshold");
+    Console.WriteLine("  --gap         <ms>  INCONSISTENT_GAP when gap > ms  (default: 1000)");
+    Console.WriteLine("  --max-dur     <ms>  INCONSISTENT_TIMEOUT when duration > ms  (default: 50000)");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- all    --input captures/");

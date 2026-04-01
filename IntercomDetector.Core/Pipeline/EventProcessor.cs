@@ -327,7 +327,7 @@ public class EventProcessor : ISampleProcessor, ISummaryProvider
         if (!configSeen)
         {
             await writer.WriteLineAsync(
-                $"#config: EventStartV={EventStartThreshold} EventEndV={EventEndThreshold} GapMs={GapThresholdMs} MaxDurMs={MaxEventDurationMs}");
+                $"#config: start>={EventStartThreshold} end<{EventEndThreshold} gap>{GapThresholdMs}ms maxDur>{MaxEventDurationMs}ms");
             _configWrittenFiles.Add(filePath);
         }
 
@@ -345,7 +345,7 @@ public class EventProcessor : ISampleProcessor, ISummaryProvider
     {
         var nowR = ToBoliviaTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ToString("HH:mm:ss.fff");
         Console.WriteLine($"{nowR} 📊 Summary            | output: {_capturesFolder}");
-        Console.WriteLine($"{nowR} 📊 Summary            | config: EventStartV={EventStartThreshold} EventEndV={EventEndThreshold} GapMs={GapThresholdMs} MaxDurMs={MaxEventDurationMs}");
+        Console.WriteLine($"{nowR} 📊 Summary            | config: start>={EventStartThreshold} end<{EventEndThreshold} gap>{GapThresholdMs}ms maxDur>{MaxEventDurationMs}ms");
         if (_eventCounts.Count == 0)
         {
             Console.WriteLine($"{nowR} 📊 Summary            | events: none");

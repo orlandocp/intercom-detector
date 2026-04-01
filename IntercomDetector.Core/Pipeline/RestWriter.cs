@@ -65,7 +65,7 @@ public class RestWriter : ISampleProcessor, ISummaryProvider, IAsyncDisposable
 
         if (!_configWrittenDates.Contains(date))
         {
-            await _writer.WriteLineAsync($"#config: RestThreshold={_restThreshold}");
+            await _writer.WriteLineAsync($"#config: voltage<{_restThreshold}");
             _configWrittenDates.Add(date);
         }
     }
@@ -74,7 +74,7 @@ public class RestWriter : ISampleProcessor, ISummaryProvider, IAsyncDisposable
     {
         var nowR = ToBoliviaTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ToString("HH:mm:ss.fff");
         Console.WriteLine($"{nowR} 📊 Summary            | output : {_capturesFolder}");
-        Console.WriteLine($"{nowR} 📊 Summary            | config : RestThreshold={_restThreshold}");
+        Console.WriteLine($"{nowR} 📊 Summary            | config : voltage<{_restThreshold}");
         Console.WriteLine($"{nowR} 📊 Summary            | samples: {_samplesWritten}");
     }
 
