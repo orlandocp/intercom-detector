@@ -7,7 +7,7 @@ namespace IntercomDetector.Core.Pipeline;
 ///   - Detect event start (voltage >= 0.5V) and end (voltage &lt; 0.3V)
 ///   - Track peaks within the event
 ///   - Handle inconsistent events (gap, timeout, out-of-order, connection reset)
-///   - Write completed events to the daily events_log_yyyyMMdd.csv
+///   - Write completed events to the daily events_yyyyMMdd.csv
 ///   - Persist active event state to active_event.json for crash recovery
 ///   - Collect per-event samples and invoke EventFileWriter for COMPLETE events
 /// </summary>
@@ -362,7 +362,7 @@ public class EventProcessor : ISampleProcessor, ISummaryProvider
     private string GetEventLogPath(long timestampMs)
     {
         string date = ToBoliviaTime(timestampMs).ToString("yyyyMMdd");
-        return Path.Combine(_capturesFolder, $"events_log_{date}.csv");
+        return Path.Combine(_capturesFolder, $"events_{date}.csv");
     }
 
     private async Task SaveActiveEventAsync(long startTime, string startTimeR)

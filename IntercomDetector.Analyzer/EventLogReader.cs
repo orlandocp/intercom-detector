@@ -1,5 +1,5 @@
 /// <summary>
-/// Reads all events_log_yyyyMMdd.csv files from the captures folder
+/// Reads all events_yyyyMMdd.csv files from the captures folder
 /// and returns parsed event entries.
 ///
 /// Only returns events with Status=COMPLETE and a non-empty Label.
@@ -17,7 +17,7 @@ public static class EventLogReader
     {
         var events = new List<EventEntry>();
 
-        var files = Directory.GetFiles(CapturesFolder, "events_log_*.csv")
+        var files = Directory.GetFiles(CapturesFolder, "events_*.csv")
                              .OrderBy(f => f)
                              .ToList();
 

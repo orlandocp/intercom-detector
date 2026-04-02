@@ -289,7 +289,7 @@ public class EventTracker
     private string GetEventLogPath(double timestampMs)
     {
         string date = ToBoliviaTime(timestampMs).ToString("yyyyMMdd");
-        return Path.Combine(CapturesFolder, $"events_log_{date}.csv");
+        return Path.Combine(CapturesFolder, $"events_{date}.csv");
     }
 
     private async Task SaveActiveEventAsync(double startTime, string startTimeR)

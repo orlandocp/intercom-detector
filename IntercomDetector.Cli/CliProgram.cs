@@ -4,8 +4,8 @@ using IntercomDetector.Core.Pipeline;
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 // -- PARSE ARGS --
-// Usage: <subcommand> --input <file-or-glob> [--output <folder>]
-// Subcommands: raw | events | rest | all
+// Usage: <subcommand> [input] [options]
+// Subcommands: event | rest | process
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
@@ -23,24 +23,28 @@ double maxDurMs     = 50000;
 
 for (int i = 1; i < args.Length; i++)
 {
-    if (args[i] == "--input"       && i + 1 < args.Length) { inputPattern = args[++i]; continue; }
-    if (args[i] == "--output"      && i + 1 < args.Length) { outputFolder = args[++i]; continue; }
-    if (args[i] == "--event-start" && i + 1 < args.Length) { eventStartV  = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
-    if (args[i] == "--event-end"   && i + 1 < args.Length) { eventEndV    = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
-    if (args[i] == "--gap"         && i + 1 < args.Length) { gapMs        = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
-    if (args[i] == "--max-dur"     && i + 1 < args.Length) { maxDurMs     = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if ((args[i] == "--input"  || args[i] == "-i") && i + 1 < args.Length) { inputPattern = args[++i]; continue; }
+    if ((args[i] == "--output" || args[i] == "-o") && i + 1 < args.Length) { outputFolder = args[++i]; continue; }
+    if ((args[i] == "--event-start" || args[i] == "-s") && i + 1 < args.Length) { eventStartV = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if ((args[i] == "--event-end"   || args[i] == "-e") && i + 1 < args.Length) { eventEndV   = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if ((args[i] == "--gap"         || args[i] == "-g") && i + 1 < args.Length) { gapMs       = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+    if ((args[i] == "--max-dur"     || args[i] == "-m") && i + 1 < args.Length) { maxDurMs    = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
+
+    // Positional argument — first non-flag token is the input path
+    if (!args[i].StartsWith('-') && string.IsNullOrWhiteSpace(inputPattern))
+    {
+        inputPattern = args[i];
+        continue;
+    }
 }
 
+// Default input to current working directory
 if (string.IsNullOrWhiteSpace(inputPattern))
-{
-    Console.Error.WriteLine("Error: --input is required.");
-    PrintUsage();
-    return;
-}
+    inputPattern = Directory.GetCurrentDirectory();
 
-if (!subcommand.IsOneOf("raw", "events", "rest", "all"))
+if (!subcommand.IsOneOf("event", "rest", "process"))
 {
-    Console.Error.WriteLine($"Error: unknown subcommand '{subcommand}'. Use raw | events | rest | all.");
+    Console.Error.WriteLine($"Error: unknown subcommand '{subcommand}'. Use event | rest | process.");
     PrintUsage();
     return;
 }
@@ -99,13 +103,10 @@ static List<ISampleProcessor> BuildProcessors(string subcommand, string captures
 {
     var list = new List<ISampleProcessor>();
 
-    if (subcommand is "raw" or "all")
-        list.Add(new RawWriter(capturesFolder));
-
-    if (subcommand is "events" or "all")
+    if (subcommand is "event" or "process")
         list.Add(new EventProcessor(capturesFolder, eventStartV, eventEndV, gapMs, maxDurMs));
 
-    if (subcommand is "rest" or "all")
+    if (subcommand is "rest" or "process")
         list.Add(new RestWriter(capturesFolder, eventEndV));
 
     return list;
@@ -173,26 +174,38 @@ static List<string> ResolveInputFiles(string pattern)
 
 static void PrintUsage()
 {
-    Console.WriteLine("Usage: IntercomDetector.Cli <subcommand> --input <folder|file|glob> [--output <folder>]");
-    Console.WriteLine("                            [--event-start <V>] [--event-end <V>] [--gap <ms>] [--max-dur <ms>]");
+    Console.WriteLine("Usage: idc <subcommand> [input] [options]");
     Console.WriteLine();
     Console.WriteLine("Subcommands:");
-    Console.WriteLine("  raw    — regenerate raw_yyyyMMdd.csv from input");
-    Console.WriteLine("  events — regenerate events_log_* and event_* files from input");
-    Console.WriteLine("  rest   — regenerate rest_yyyyMMdd.csv from input");
-    Console.WriteLine("  all    — regenerate all output types");
+    Console.WriteLine("  event   — generate events_* and event_* files from raw input");
+    Console.WriteLine("  rest    — generate rest_yyyyMMdd.csv from raw input");
+    Console.WriteLine("  process — event + rest in one pass");
     Console.WriteLine();
-    Console.WriteLine("Threshold options:");
-    Console.WriteLine("  --event-start <V>   open event when voltage >= V  (default: 0.5)");
-    Console.WriteLine("  --event-end   <V>   close event when voltage < V  (default: 0.3) — also sets rest threshold");
-    Console.WriteLine("  --gap         <ms>  INCONSISTENT_GAP when gap > ms  (default: 1000)");
-    Console.WriteLine("  --max-dur     <ms>  INCONSISTENT_TIMEOUT when duration > ms  (default: 50000)");
+    Console.WriteLine("Input (optional, default: current directory):");
+    Console.WriteLine("  <folder>           finds all raw_*.csv inside");
+    Console.WriteLine("  <file>             single raw file (any name)");
+    Console.WriteLine("  <glob>             e.g. captures/raw_2026*.csv");
+    Console.WriteLine("  -i, --input <path>");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  -o, --output      <folder>  output folder (default: timestamped subfolder next to input)");
+    Console.WriteLine("  -e, --event-end   <V>       [all]            voltage < V closes event / sets rest threshold  (default: 0.3)");
+    Console.WriteLine("  -s, --event-start <V>       [event, process] voltage >= V opens event  (default: 0.5)");
+    Console.WriteLine("  -g, --gap         <ms>      [event, process] INCONSISTENT_GAP when gap > ms  (default: 1000)");
+    Console.WriteLine("  -m, --max-dur     <ms>      [event, process] INCONSISTENT_TIMEOUT when duration > ms  (default: 50000)");
     Console.WriteLine();
     Console.WriteLine("Examples:");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- all    --input captures/");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- rest   --input captures/raw_20260321.csv");
-    Console.WriteLine("  dotnet run --project IntercomDetector.Cli -- events --input captures/ --event-start 0.4 --gap 800");
+    Console.WriteLine("  idc process                                        # cwd, all raw_*.csv, default thresholds");
+    Console.WriteLine("  idc process captures/                              # folder input");
+    Console.WriteLine("  idc process captures/ -o results/                  # custom output folder");
+    Console.WriteLine("  idc process captures/ -s 0.4 -e 0.25 -g 800 -m 60000 -o out/  # all flags");
+    Console.WriteLine("  idc event   captures/raw_20260321.csv              # single file, events only");
+    Console.WriteLine("  idc event   captures/raw_2026*.csv                 # glob input");
+    Console.WriteLine("  idc event   captures/ -s 0.4 -e 0.25              # custom open/close thresholds");
+    Console.WriteLine("  idc event   captures/ -g 800 -m 60000             # custom gap and max duration");
+    Console.WriteLine("  idc rest    captures/raw_20260321.csv              # single file, rest only");
+    Console.WriteLine("  idc rest    captures/ -e 0.25                     # custom rest threshold");
+    Console.WriteLine("  idc event   -i captures/raw_20260321.csv          # named input flag");
 }
 
 // Extension helper

@@ -5,7 +5,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>IntercomDetector.Cli</AssemblyName>
+    <AssemblyName>idc</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
