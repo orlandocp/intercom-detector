@@ -21,9 +21,10 @@ double eventStartV  = 0.5;
 double eventEndV    = 0.3;
 double gapMs        = 1000;
 double maxDurMs     = 50000;
-long?  zoomFromMs   = null;
-long?  zoomToMs     = null;
-long?  zoomBucketMs = null;
+long?   zoomFromMs   = null;
+long?   zoomToMs     = null;
+long?   zoomBucketMs = null;
+double? voltBucketV  = null;
 
 for (int i = 1; i < args.Length; i++)
 {
@@ -35,7 +36,16 @@ for (int i = 1; i < args.Length; i++)
     if ((args[i] == "--max-dur"     || args[i] == "-m") && i + 1 < args.Length) { maxDurMs    = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
     if (args[i] == "--from"   && i + 1 < args.Length) { zoomFromMs   = long.Parse(args[++i]); continue; }
     if (args[i] == "--to"     && i + 1 < args.Length) { zoomToMs     = long.Parse(args[++i]); continue; }
-    if (args[i] == "--bucket" && i + 1 < args.Length) { zoomBucketMs = long.Parse(args[++i]); continue; }
+    if (args[i] == "--bucket" && i + 1 < args.Length)
+    {
+        string bval = args[++i];
+        if (long.TryParse(bval, out long bMs))
+            zoomBucketMs = bMs;
+        else if (double.TryParse(bval, System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out double bV))
+            voltBucketV = bV;
+        continue;
+    }
 
     if (!args[i].StartsWith('-') && string.IsNullOrWhiteSpace(inputPattern))
     {
@@ -69,7 +79,7 @@ if (subcommand == "analyze-rest")
     Console.WriteLine($"▶ Input files: {restFiles.Count} rest file(s)");
     Console.WriteLine();
 
-    var result = RestAnalyzer.Analyze(restFiles);
+    var result = RestAnalyzer.Analyze(restFiles, voltBucketV);
     PrintRestAnalysis(result);
     return;
 }
@@ -593,96 +603,70 @@ static string FormatMsValue(long ms, long stepMs = 0)
 
 static void PrintRestAnalysis(RestAnalysisResult r)
 {
-    const int W = 66;
-    string line = new string('─', W);
+    const int W  = 82;
     string dline = new string('═', W);
+    string line  = new string('─', W);
 
     Console.WriteLine(dline);
-    Console.WriteLine("  REST SIGNAL ANALYSIS");
+    Console.WriteLine("  REST VOLTAGE ANALYSIS");
     Console.WriteLine(dline);
-    Console.WriteLine($"  Files  : {r.SourceFiles.Count}");
-    foreach (var f in r.SourceFiles)
-        Console.WriteLine($"           {Path.GetFileName(f)}");
-    if (r.ConfigFilter.HasValue)
-        Console.WriteLine($"  Filter : voltage < {r.ConfigFilter:F2}V  (from #config in file)");
-    Console.WriteLine($"  Samples: {r.TotalSamples:N0}");
+    Console.WriteLine($"  Files   : {r.SourceFiles.Count}  ({r.DateFrom} → {r.DateTo})");
+    Console.WriteLine($"  Samples : {r.TotalSamples:N0}");
     Console.WriteLine();
-
     Console.WriteLine(line);
-    Console.WriteLine("  ALL SAMPLES");
+    Console.WriteLine("  CONFIGURATION");
     Console.WriteLine(line);
-    PrintStats(r.All);
+    string bucketTag = r.BucketIsAuto ? "(auto)" : "(manual)";
+    Console.WriteLine($"  Voltage bucket : {r.BucketWidthV:F3}V      {bucketTag}");
     Console.WriteLine();
-
     Console.WriteLine(line);
-    Console.WriteLine("  RUN ANALYSIS");
+    Console.WriteLine("  VOLTAGE SUMMARY");
     Console.WriteLine(line);
-    if (r.EventFilesAnalyzed > 0)
-        Console.WriteLine($"  Gap threshold: {r.GapThresholdMs}ms  " +
-            $"← ceil(({r.MaxEventGapMs} + 50) / 50) × 50  " +
-            $"[max gap from {r.EventFilesAnalyzed} event files]");
-    else
-        Console.WriteLine($"  Gap threshold: {r.GapThresholdMs}ms  ← fallback (no event files found)");
-    Console.WriteLine($"  Total runs : {r.TotalRuns:N0}");
-    Console.WriteLine($"  Long runs  : {r.LongRunCount:N0}  (≥100 samples = ≥5s continuous)  →  stable rest");
-    Console.WriteLine($"  Short runs : {r.ShortRunCount:N0}  (<100 samples)  →  transitions / decay");
+    VoltageStats s = r.Stats;
+    Console.WriteLine($"  Min    : {s.Min,9:F3}V");
+    Console.WriteLine($"  P50    : {s.P50,9:F3}V");
+    Console.WriteLine($"  P75    : {s.P75,9:F3}V");
+    Console.WriteLine($"  P90    : {s.P90,9:F3}V");
+    Console.WriteLine($"  P95    : {s.P95,9:F3}V");
+    Console.WriteLine($"  P99    : {s.P99,9:F3}V");
+    Console.WriteLine($"  P99.9  : {s.P999,9:F3}V");
+    Console.WriteLine($"  Max    : {s.Max,9:F3}V");
+    Console.WriteLine($"  Mean   : {s.Mean,9:F3}V  ±  {s.StdDev:F3}V (stddev)");
     Console.WriteLine();
-
-    if (r.LongRuns.Count > 0)
-    {
-        Console.WriteLine($"  LONG RUNS — stable rest  ({r.LongRuns.Count:N0} samples)");
-        PrintStats(r.LongRuns);
-        Console.WriteLine();
-    }
-    else
-    {
-        Console.WriteLine("  LONG RUNS — none found");
-        Console.WriteLine();
-    }
-
-    if (r.ShortRuns.Count > 0)
-    {
-        Console.WriteLine($"  SHORT RUNS — transitions / decay  ({r.ShortRuns.Count:N0} samples)");
-        PrintStats(r.ShortRuns);
-        Console.WriteLine();
-    }
-    else
-    {
-        Console.WriteLine("  SHORT RUNS — none found");
-        Console.WriteLine();
-    }
-
     Console.WriteLine(line);
-    Console.WriteLine("  HISTOGRAM  (0.01V buckets, all samples)");
+    Console.WriteLine($"  VOLTAGE DISTRIBUTION  (bucket: {r.BucketWidthV:F3}V)");
     Console.WriteLine(line);
-    PrintHistogram(r.Histogram, r.TotalSamples, r.BucketWidth);
+    PrintVoltageTable(r.Histogram, r.TotalSamples, r.BucketWidthV);
     Console.WriteLine(dline);
 }
 
-static void PrintStats(VoltageStats s)
+static void PrintVoltageTable(int[] histogram, int total, double bucketWidthV)
 {
-    Console.WriteLine($"  Min   {s.Min:F3}V   Max   {s.Max:F3}V   Mean  {s.Mean:F3}V   StdDev {s.StdDev:F3}V");
-    Console.WriteLine($"  P50   {s.P50:F3}V   P75   {s.P75:F3}V   P90   {s.P90:F3}V");
-    Console.WriteLine($"  P95   {s.P95:F3}V   P99   {s.P99:F3}V   P99.9 {s.P999:F3}V");
-}
+    const int barMax = 30;
+    bool      ansi   = !Console.IsOutputRedirected;
+    const string bold  = "\x1b[1m";
+    const string reset = "\x1b[0m";
 
-static void PrintHistogram(int[] histogram, int total, double bucketWidth)
-{
-    if (total == 0) return;
-    const int barMaxWidth = 40;
+    int maxCount = histogram.Length > 0 ? histogram.Max() : 0;
 
-    int maxCount = histogram.Max();
+    Console.WriteLine($"  {"FROM",9}   {"TO",9}   {"COUNT",12}   {"%",7}   DISTRIBUTION");
+    Console.WriteLine($"  {"─────────",9}   {"─────────",9}   {"────────────",12}   {"───────",7}   ───────────────¦──────────────¦");
 
     for (int i = 0; i < histogram.Length; i++)
     {
-        double from  = i * bucketWidth;
-        double to    = from + bucketWidth;
-        int    count = histogram[i];
-        double pct   = 100.0 * count / total;
-        int    bars  = maxCount > 0 ? (int)Math.Round((double)count / maxCount * barMaxWidth) : 0;
-        string bar   = new string('█', bars);
+        int count = histogram[i];
+        if (count == 0) continue;
 
-        Console.WriteLine($"  {from:F2}-{to:F2}V  {bar,-40}  {pct,5:F1}%  ({count:N0})");
+        string from   = $"{i * bucketWidthV:F3}V";
+        string to     = $"{(i + 1) * bucketWidthV:F3}V";
+        double pct    = total > 0 ? 100.0 * count / total : 0;
+        string pctStr = count > 0 && pct < 0.005 ? "<0.01%" : $"{pct:F2}%";
+        int    bars   = maxCount > 0 ? (int)Math.Round((double)count / maxCount * barMax) : 0;
+        string bar    = new string('█', bars).PadRight(barMax);
+        string pre    = ansi ? bold : "";
+        string suf    = ansi ? reset : "";
+
+        Console.WriteLine($"{pre}  {from,9}   {to,9}   {count,12:N0}   {pctStr,7}   {bar}|{suf}");
     }
 }
 

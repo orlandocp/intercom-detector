@@ -3,26 +3,25 @@ namespace IntercomDetector.Core.Analysis;
 /// <summary>Descriptive statistics for a set of voltage samples.</summary>
 public class VoltageStats
 {
-    public int    Count   { get; init; }
-    public double Min     { get; init; }
-    public double Max     { get; init; }
-    public double Mean    { get; init; }
-    public double StdDev  { get; init; }
-    public double P50     { get; init; }
-    public double P75     { get; init; }
-    public double P90     { get; init; }
-    public double P95     { get; init; }
-    public double P99     { get; init; }
-    public double P999    { get; init; }
+    public int    Count  { get; init; }
+    public double Min    { get; init; }
+    public double Max    { get; init; }
+    public double Mean   { get; init; }
+    public double StdDev { get; init; }
+    public double P50    { get; init; }
+    public double P75    { get; init; }
+    public double P90    { get; init; }
+    public double P95    { get; init; }
+    public double P99    { get; init; }
+    public double P999   { get; init; }
 
     public static VoltageStats Compute(List<double> values)
     {
         if (values.Count == 0)
             return new VoltageStats();
 
-        int n = values.Count;
+        int n      = values.Count;
         var sorted = values.OrderBy(v => v).ToList();
-
         double mean     = values.Sum() / n;
         double variance = values.Sum(v => (v - mean) * (v - mean)) / n;
 
@@ -44,42 +43,25 @@ public class VoltageStats
 
     private static double Percentile(List<double> sorted, double p)
     {
-        int idx = (int)Math.Floor(p * sorted.Count);
-        idx = Math.Clamp(idx, 0, sorted.Count - 1);
+        int idx = Math.Clamp((int)Math.Floor(p * sorted.Count), 0, sorted.Count - 1);
         return sorted[idx];
     }
 }
 
-/// <summary>A contiguous run of rest samples (no time gap > threshold between them).</summary>
-public class RestRun
-{
-    public int          SampleCount { get; init; }
-    public long         StartMs     { get; init; }
-    public long         EndMs       { get; init; }
-    public long         DurationMs  => EndMs - StartMs;
-    public List<double> Voltages    { get; init; } = new();
-}
-
-/// <summary>Full result of a rest file analysis session.</summary>
+/// <summary>Result of a rest voltage analysis session.</summary>
 public class RestAnalysisResult
 {
     public List<string> SourceFiles  { get; init; } = new();
-    public double?      ConfigFilter { get; init; }
+    public string       DateFrom     { get; init; } = "";
+    public string       DateTo       { get; init; } = "";
     public int          TotalSamples { get; init; }
 
-    // Gap threshold used for run segmentation — derived dynamically from event files
-    public long   GapThresholdMs     { get; init; }
-    public long   MaxEventGapMs      { get; init; }  // raw max before formula
-    public int    EventFilesAnalyzed { get; init; }
+    /// <summary>Voltage bucket width used for the histogram.</summary>
+    public double BucketWidthV  { get; init; }
+    /// <summary>True when bucket was auto-computed; false when supplied via --bucket.</summary>
+    public bool   BucketIsAuto  { get; init; }
 
-    public VoltageStats All       { get; init; } = new();
-    public VoltageStats LongRuns  { get; init; } = new();
-    public VoltageStats ShortRuns { get; init; } = new();
-
-    public int TotalRuns     { get; init; }
-    public int LongRunCount  { get; init; }
-    public int ShortRunCount { get; init; }
-
-    public int[]  Histogram   { get; init; } = Array.Empty<int>();
-    public double BucketWidth { get; init; } = 0.01;
+    public VoltageStats Stats     { get; init; } = new();
+    /// <summary>Histogram counts, index i covers [i×BucketWidthV, (i+1)×BucketWidthV).</summary>
+    public int[]        Histogram { get; init; } = Array.Empty<int>();
 }
