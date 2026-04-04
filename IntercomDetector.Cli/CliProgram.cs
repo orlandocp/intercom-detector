@@ -280,7 +280,11 @@ static void PrintEventAnalysis(EventAnalysisResult r)
         Console.WriteLine(line);
         Console.WriteLine("  CORRELATION TOTALS");
         Console.WriteLine(line);
-        Console.WriteLine($"  {"total",-21}   {grand,12:N0}   {"100.00%",7}   {new string('█', 30)}|");
+        bool   ansiCt  = !Console.IsOutputRedirected;
+        string boldCt  = ansiCt ? "\x1b[1m" : "";
+        string dimCt   = ansiCt ? "\x1b[2m" : "";
+        string resetCt = ansiCt ? "\x1b[0m" : "";
+        Console.WriteLine($"{boldCt}  {"total",-21}   {grand,12:N0}   {"100.00%",7}   {new string('█', 30)}|{resetCt}");
 
         foreach (var (label, count) in new[] { ("r", totR), ("v", totV), ("c", totC), ("unk", totUnk) })
         {
@@ -289,10 +293,18 @@ static void PrintEventAnalysis(EventAnalysisResult r)
             string pctStr = count > 0 && pct < 0.005 ? "<0.01%" : $"{pct:F2}%";
             int    bars   = grand > 0 ? (int)Math.Round((double)count / grand * 15) : 0;
             string bar    = new string('░', bars).PadRight(30);
-            Console.WriteLine($"{"",18}{"↳ " + label,-5}   {count,12:N0}   {pctStr,7}   {bar}|");
+            Console.WriteLine($"{dimCt}{"",18}{"↳ " + label,-5}   {count,12:N0}   {pctStr,7}   {bar}|{resetCt}");
         }
         if (outsideZoom > 0)
-            Console.WriteLine($"  · {outsideZoom:N0} gap(s) outside zoom range — not counted above");
+        {
+            double ozPct    = r.Gaps.TotalGaps > 0 ? 100.0 * outsideZoom / r.Gaps.TotalGaps : 0;
+            string ozPctStr = outsideZoom > 0 && ozPct < 0.005 ? "<0.01%" : $"{ozPct:F2}%";
+            string ozCond = r.Gaps.ZoomFromMs!.Value > 0
+                ? $"< {FormatMsValue(r.Gaps.ZoomFromMs.Value)} or > {FormatMsValue(r.Gaps.ZoomToMs!.Value)}"
+                : $"> {FormatMsValue(r.Gaps.ZoomToMs!.Value)}";
+            Console.WriteLine();
+            Console.WriteLine($"  · {outsideZoom:N0} ({ozPctStr}) of {r.Gaps.TotalGaps:N0} gaps {ozCond} (outside zoom)");
+        }
     }
 
     if (r.UnknownEvents.Count > 0)
@@ -372,7 +384,11 @@ static void PrintRawAnalysis(RawAnalysisResult r)
         Console.WriteLine(line);
         Console.WriteLine("  CORRELATION TOTALS");
         Console.WriteLine(line);
-        Console.WriteLine($"  {"total",-21}   {grand,12:N0}   {"100.00%",7}   {new string('█', 30)}|");
+        bool   ansiCt2  = !Console.IsOutputRedirected;
+        string boldCt2  = ansiCt2 ? "\x1b[1m" : "";
+        string dimCt2   = ansiCt2 ? "\x1b[2m" : "";
+        string resetCt2 = ansiCt2 ? "\x1b[0m" : "";
+        Console.WriteLine($"{boldCt2}  {"total",-21}   {grand,12:N0}   {"100.00%",7}   {new string('█', 30)}|{resetCt2}");
 
         foreach (var (label, count) in new[] { ("r", totR), ("v", totV), ("c", totC), ("unk", totUnk), ("out", totOut) })
         {
@@ -381,10 +397,18 @@ static void PrintRawAnalysis(RawAnalysisResult r)
             string pctStr = count > 0 && pct < 0.005 ? "<0.01%" : $"{pct:F2}%";
             int    bars   = grand > 0 ? (int)Math.Round((double)count / grand * 15) : 0;
             string bar    = new string('░', bars).PadRight(30);
-            Console.WriteLine($"{"",18}{"↳ " + label,-5}   {count,12:N0}   {pctStr,7}   {bar}|");
+            Console.WriteLine($"{dimCt2}{"",18}{"↳ " + label,-5}   {count,12:N0}   {pctStr,7}   {bar}|{resetCt2}");
         }
         if (outsideZoom > 0)
-            Console.WriteLine($"  · {outsideZoom:N0} gap(s) outside zoom range — not counted above");
+        {
+            double ozPct    = r.Gaps.TotalGaps > 0 ? 100.0 * outsideZoom / r.Gaps.TotalGaps : 0;
+            string ozPctStr = outsideZoom > 0 && ozPct < 0.005 ? "<0.01%" : $"{ozPct:F2}%";
+            string ozCond = r.Gaps.ZoomFromMs!.Value > 0
+                ? $"< {FormatMsValue(r.Gaps.ZoomFromMs.Value)} or > {FormatMsValue(r.Gaps.ZoomToMs!.Value)}"
+                : $"> {FormatMsValue(r.Gaps.ZoomToMs!.Value)}";
+            Console.WriteLine();
+            Console.WriteLine($"  · {outsideZoom:N0} ({ozPctStr}) of {r.Gaps.TotalGaps:N0} gaps {ozCond} (outside zoom)");
+        }
     }
 
     if (r.UnknownEvents.Count > 0)
@@ -469,6 +493,10 @@ static void PrintGapTable(List<GapBucket> buckets, int total,
 {
     const int barMax    = 30;
     const int subBarMax = 15;
+    bool      ansi      = !Console.IsOutputRedirected;
+    const string bold   = "\x1b[1m";
+    const string dim    = "\x1b[2m";
+    const string reset  = "\x1b[0m";
 
     // Trim trailing zero-count buckets (keep at least one row), preserving original indices
     int lastNonZero = buckets.Count - 1;
@@ -499,11 +527,15 @@ static void PrintGapTable(List<GapBucket> buckets, int total,
 
         BucketCorrelation? corr = correlations != null && origIdx < correlations.Count ? correlations[origIdx] : null;
 
-        Console.WriteLine($"  {from,9}   {to,9}   {b.Count,12:N0}   {pctStr,7}   {bar}|");
+        string pre = ansi ? bold : "";
+        string suf = ansi ? reset : "";
+        Console.WriteLine($"{pre}  {from,9}   {to,9}   {b.Count,12:N0}   {pctStr,7}   {bar}|{suf}");
 
         // Sub-rows for each non-zero label
         if (corr != null && corr.HasAny)
         {
+            string spre = ansi ? dim : "";
+            string ssuf = ansi ? reset : "";
             foreach (var (label, count) in new[]
             {
                 ("r",   corr.R),
@@ -518,7 +550,7 @@ static void PrintGapTable(List<GapBucket> buckets, int total,
                 string subPctStr = count > 0 && subPct < 0.005 ? "<0.01%" : $"{subPct:F2}%";
                 int    subBars   = b.Count > 0 ? (int)Math.Round((double)count / b.Count * subBarMax) : 0;
                 string subBar    = new string('░', subBars).PadRight(barMax);
-                Console.WriteLine($"{"",18}{"↳ " + label,-5}   {count,12:N0}   {subPctStr,7}   {subBar}|");
+                Console.WriteLine($"{spre}{"",18}{"↳ " + label,-5}   {count,12:N0}   {subPctStr,7}   {subBar}|{ssuf}");
             }
         }
     }
