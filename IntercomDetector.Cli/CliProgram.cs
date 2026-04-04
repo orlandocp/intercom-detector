@@ -611,11 +611,14 @@ static void PrintRestAnalysis(RestAnalysisResult r)
     Console.WriteLine("  REST VOLTAGE ANALYSIS");
     Console.WriteLine(dline);
     Console.WriteLine($"  Files   : {r.SourceFiles.Count}  ({r.DateFrom} → {r.DateTo})");
-    Console.WriteLine($"  Samples : {r.TotalSamples:N0}");
+    Console.WriteLine($"  Samples : {r.TotalSamples:N0}  total");
+    double validPct = r.TotalSamples > 0 ? 100.0 * r.ValidSamples / r.TotalSamples : 0;
+    Console.WriteLine($"  Valid   : {r.ValidSamples:N0}  ({validPct:F2}%)  ← direction-flip filter");
     Console.WriteLine();
     Console.WriteLine(line);
     Console.WriteLine("  CONFIGURATION");
     Console.WriteLine(line);
+    Console.WriteLine($"  Gap threshold  : {FormatMsValue(r.GapThresholdMs),-10}  (fixed)");
     string bucketTag = r.BucketIsAuto ? "(auto)" : "(manual)";
     Console.WriteLine($"  Voltage bucket : {r.BucketWidthV:F3}V      {bucketTag}");
     Console.WriteLine();

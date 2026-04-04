@@ -54,14 +54,20 @@ public class RestAnalysisResult
     public List<string> SourceFiles  { get; init; } = new();
     public string       DateFrom     { get; init; } = "";
     public string       DateTo       { get; init; } = "";
-    public int          TotalSamples { get; init; }
 
+    /// <summary>Total samples read from all rest files.</summary>
+    public int TotalSamples { get; init; }
+    /// <summary>Samples accepted after the direction-flip filter (confirmed rest).</summary>
+    public int ValidSamples { get; init; }
+
+    /// <summary>Gap threshold used to reset the state machine (ms).</summary>
+    public long   GapThresholdMs { get; init; }
     /// <summary>Voltage bucket width used for the histogram.</summary>
-    public double BucketWidthV  { get; init; }
+    public double BucketWidthV   { get; init; }
     /// <summary>True when bucket was auto-computed; false when supplied via --bucket.</summary>
-    public bool   BucketIsAuto  { get; init; }
+    public bool   BucketIsAuto   { get; init; }
 
     public VoltageStats Stats     { get; init; } = new();
-    /// <summary>Histogram counts, index i covers [i×BucketWidthV, (i+1)×BucketWidthV).</summary>
+    /// <summary>Histogram counts over valid samples only. Index i covers [i×BucketWidthV, (i+1)×BucketWidthV).</summary>
     public int[]        Histogram { get; init; } = Array.Empty<int>();
 }
