@@ -43,11 +43,11 @@ public static class EventAnalyzer
 
         // Per-bucket correlation
         List<BucketCorrelation>? bucketCorrelations = null;
-        if (gaps.ZoomFromMs.HasValue && gaps.ZoomBucketMs.HasValue && gaps.ZoomBuckets != null)
+        if (gaps.ZoomFromMs.HasValue && gaps.ZoomToMs.HasValue && gaps.ZoomBucketMs.HasValue && gaps.ZoomBuckets != null)
         {
             bucketCorrelations = ComputeCorrelation(
                 files, events,
-                gaps.ZoomFromMs.Value, gaps.ZoomBucketMs.Value, gaps.ZoomBuckets.Count);
+                gaps.ZoomFromMs.Value, gaps.ZoomToMs.Value, gaps.ZoomBucketMs.Value, gaps.ZoomBuckets.Count);
         }
 
         return new EventAnalysisResult
@@ -129,7 +129,7 @@ public static class EventAnalyzer
 
     private static List<BucketCorrelation> ComputeCorrelation(
         List<string> eventFiles, Dictionary<long, string> events,
-        long zoomFrom, long bucketSize, int bucketCount)
+        long zoomFrom, long zoomTo, long bucketSize, int bucketCount)
     {
         var r   = new int[bucketCount];
         var v   = new int[bucketCount];
@@ -157,7 +157,7 @@ public static class EventAnalyzer
                 {
                     long gap    = ts - prevTs;
                     long relGap = gap - zoomFrom;
-                    if (relGap >= 0)
+                    if (relGap >= 0 && gap < zoomTo)
                     {
                         int idx = (int)(relGap / bucketSize);
                         if (idx < bucketCount)
