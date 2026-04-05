@@ -1,5 +1,36 @@
 namespace IntercomDetector.Core.Analysis;
 
+// ── ZOOM TYPES ────────────────────────────────────────────────────────────────
+
+public enum SampleRole { Prev, Reset, Anchor, Scan, Flip, Confirm, Valid, Match, Post }
+
+/// <summary>One sample in a zoom context window.</summary>
+public record RestSampleContext(
+    long       Ts,
+    string     TimeR,
+    long?      GapMs,
+    SampleRole Role,
+    double     V,
+    string     Trend,       // "UP", "DOWN", "—", or "gap > Nms"
+    int?       MatchNum = null  // set on Match rows and on Valid rows that were previously a Match
+);
+
+/// <summary>One streaming zoom match: a valid sample in [fromV, toV] with its context.</summary>
+public record RestZoomMatch(
+    string                  File,
+    long                    MatchTs,
+    string                  MatchTimeR,
+    double                  MatchV,
+    /// <summary>Full context: prev? → RESET → anchor → scan… → CONFIRM → valid… → MATCH.</summary>
+    List<RestSampleContext>  Context,
+    /// <summary>The 1 post sample, or null if cut by gap/eof.</summary>
+    RestSampleContext?       PostSample,
+    /// <summary>Non-null when PostSample is null: reason for the cut.</summary>
+    string?                  PostCutReason
+);
+
+// ── STATISTICS & RESULT ───────────────────────────────────────────────────────
+
 /// <summary>Descriptive statistics for a set of voltage samples.</summary>
 public class VoltageStats
 {

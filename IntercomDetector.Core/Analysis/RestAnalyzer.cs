@@ -22,11 +22,14 @@ public static class RestAnalyzer
 
         foreach (var path in files)
         {
-            foreach (var (ts, v) in ReadSamples(path))
+            foreach (var (ts, v, _) in ReadSamples(path))
             {
                 total++;
                 if (filter.Process(ts, v))
+                {
+                    foreach (var fv in filter.LastFlushed) valid.Add(fv);
                     valid.Add(v);
+                }
             }
         }
 
@@ -48,6 +51,288 @@ public static class RestAnalyzer
         };
     }
 
+    // ── VOLTAGE ZOOM ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams confirmed-rest valid samples whose voltage falls within [fromV, toV].
+    /// For each match the callback receives the full context (prev → RESET → … → CONFIRM
+    /// → valid… → MATCH) plus 1 post sample.  Return false from the callback to stop.
+    /// Each sample that was a "post" for the previous match is re-evaluated as a
+    /// potential next match, so the total count equals the histogram bucket count.
+    /// </summary>
+    public static void StreamZoom(
+        IEnumerable<string> filePaths, double fromV, double toV,
+        Func<RestZoomMatch, bool> onMatch)
+    {
+        var scanner = new RestZoomScanner(fromV, toV, onMatch);
+        foreach (var path in filePaths.OrderBy(f => f))
+        {
+            foreach (var (ts, v, timeR) in ReadSamples(path))
+                if (!scanner.Feed(path, ts, timeR, v)) return;
+            if (!scanner.FlushFile()) return;
+        }
+    }
+
+    private sealed class RestZoomScanner
+    {
+        private const long GapMs = RestStateFilter.GapThresholdMs;
+
+        private enum SState { Scanning, PendingConfirm, Confirmed, WaitingPost }
+        private enum STrend { None, Up, Down }
+
+        private readonly double                  _fromV;
+        private readonly double                  _toV;
+        private readonly Func<RestZoomMatch, bool> _callback;
+        private bool _stopped = false;
+
+        // Current sample tracking
+        private SState _state      = SState.Scanning;
+        private STrend _prevTrend  = STrend.None;
+        private long   _prevTs     = -1;
+        private long   _pendingTs  = -1;  // timestamp of first flip; -1 when not in PendingConfirm
+        private double _prevV      = double.NaN;
+        private string _prevTimeR  = "";
+        private double _lastValidV = double.NaN; // voltage of last sample added to _validHistory
+        private int    _matchCount = 0;           // increments each time a match is fired
+
+        // Buffer for UP samples in Confirmed state (retroactively flushed to validHistory on DOWN flip)
+        private readonly List<RestSampleContext> _pendingBuf = new();
+
+        // Scan segment buffer (RESET → anchor → scan… → CONFIRM)
+        private readonly List<RestSampleContext> _segBuf = new();
+        private RestSampleContext? _prevSample = null;
+
+        // Confirmed state: fixed confirm context + growing valid history
+        private List<RestSampleContext>         _confirmCtx   = new();
+        private readonly List<RestSampleContext> _validHistory = new();
+
+        // WaitingPost: context built up to and including the MATCH row
+        private List<RestSampleContext>? _matchCtx    = null;
+        private string                   _matchFile   = "";
+        private long                     _matchTs     = 0;
+        private string                   _matchTimeR  = "";
+        private double                   _matchV      = 0;
+
+        // Post sample deferred for re-evaluation after WaitingPost fires
+        private (long Ts, string TimeR, double V, string File)? _pendingPost = null;
+
+        public RestZoomScanner(double fromV, double toV, Func<RestZoomMatch, bool> callback)
+            => (_fromV, _toV, _callback) = (fromV, toV, callback);
+
+        public bool Feed(string file, long ts, string timeR, double v)
+        {
+            if (_stopped) return false;
+
+            // Re-evaluate the previous post sample before processing the new one
+            if (_pendingPost.HasValue)
+            {
+                var pp = _pendingPost.Value;
+                _pendingPost = null;
+                long ppGap = pp.Ts - _prevTs;
+                if (!ProcessSample(pp.File, pp.Ts, pp.TimeR, pp.V, ppGap)) return false;
+            }
+
+            if (_prevTs < 0) { Store(ts, timeR, v); return true; }
+            return ProcessSample(file, ts, timeR, v, ts - _prevTs);
+        }
+
+        public bool FlushFile()
+        {
+            if (_stopped) return false;
+            if (_pendingPost.HasValue)
+            {
+                var pp = _pendingPost.Value;
+                _pendingPost = null;
+                ProcessSample(pp.File, pp.Ts, pp.TimeR, pp.V, pp.Ts - _prevTs);
+            }
+            if (!_stopped && _state == SState.WaitingPost)
+                FireAndContinue(post: null, cutReason: "end of file");
+            return !_stopped;
+        }
+
+        private void ResetToScanning(long ts, string timeR, double v, long gap, string reason)
+        {
+            _prevSample = new RestSampleContext(_prevTs, _prevTimeR, null, SampleRole.Prev, _prevV, "—");
+            _segBuf.Clear();
+            _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Reset, v, reason));
+            _prevTrend  = STrend.None;
+            _state      = SState.Scanning;
+            _pendingTs  = -1;
+            _pendingBuf.Clear();
+            _lastValidV = double.NaN;
+            _confirmCtx.Clear();
+            _validHistory.Clear();
+            Store(ts, timeR, v);
+        }
+
+        private bool ProcessSample(string file, long ts, string timeR, double v, long gap)
+        {
+            // ── Gap reset ─────────────────────────────────────────────────────
+            if (gap > GapMs)
+            {
+                if (_state == SState.WaitingPost)
+                    FireAndContinue(post: null, cutReason: $"gap > {GapMs}ms");
+
+                ResetToScanning(ts, timeR, v, gap, $"gap > {GapMs}ms");
+                return !_stopped;
+            }
+
+            // ── WaitingPost ───────────────────────────────────────────────────
+            if (_state == SState.WaitingPost)
+            {
+                var postCtx = new RestSampleContext(ts, timeR, gap, SampleRole.Post, v, TrendStr(v));
+                FireAndContinue(post: postCtx, cutReason: null);
+                // Defer this sample for re-evaluation as a potential next match
+                _pendingPost = (ts, timeR, v, file);
+                return !_stopped;
+            }
+
+            // ── PendingConfirm timeout ────────────────────────────────────────
+            if (_state == SState.PendingConfirm && ts - _pendingTs > GapMs)
+            {
+                ResetToScanning(ts, timeR, v, gap, $"flip timeout > {GapMs}ms");
+                return !_stopped;
+            }
+
+            // ── Scanning / PendingConfirm ─────────────────────────────────────
+            if (_state == SState.Scanning || _state == SState.PendingConfirm)
+            {
+                if (v == _prevV)
+                {
+                    _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Scan, v, "—"));
+                    Store(ts, timeR, v); return true;
+                }
+
+                STrend newTrend    = v > _prevV ? STrend.Up : STrend.Down;
+                string newTrendStr = newTrend == STrend.Up ? "UP" : "DOWN";
+
+                if (_prevTrend == STrend.None)
+                {
+                    _prevTrend = newTrend;
+                    _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Anchor, v, newTrendStr));
+                    Store(ts, timeR, v); return true;
+                }
+
+                bool flipped = newTrend != _prevTrend;
+                _prevTrend   = newTrend;
+
+                if (!flipped)
+                {
+                    _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Scan, v, newTrendStr));
+                    Store(ts, timeR, v); return true;
+                }
+
+                if (_state == SState.Scanning)
+                {
+                    // First flip: mark as Flip in segBuf, enter PendingConfirm
+                    _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Flip, v, newTrendStr));
+                    _pendingTs = ts;
+                    _state     = SState.PendingConfirm;
+                    Store(ts, timeR, v); return true;
+                }
+
+                // PendingConfirm + second flip within timeout → Confirmed
+                _segBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Confirm, v, newTrendStr));
+                _confirmCtx.Clear();
+                if (_prevSample != null) _confirmCtx.Add(_prevSample);
+                _confirmCtx.AddRange(_segBuf);
+                _validHistory.Clear();
+                _pendingTs  = -1;
+                _pendingBuf.Clear();
+                _lastValidV = v;
+                _state      = SState.Confirmed;
+                Store(ts, timeR, v); return true;
+            }
+
+            // ── Confirmed ─────────────────────────────────────────────────────
+
+            if (v > _prevV)                              // UP — buffer, not valid yet
+            {
+                _pendingBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, TrendStr(v)));
+                Store(ts, timeR, v); return true;
+            }
+
+            if (v == _prevV && _pendingBuf.Count > 0)    // flat while buffering — buffer
+            {
+                _pendingBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, "—"));
+                Store(ts, timeR, v); return true;
+            }
+
+            // DOWN reconfirm or flat-not-buffering: flush pending buffer to validHistory
+            if (_pendingBuf.Count > 0)
+            {
+                foreach (var ctx in _pendingBuf)
+                {
+                    _lastValidV = ctx.V;
+                    _validHistory.Add(ctx);
+                }
+                _pendingBuf.Clear();
+            }
+
+            // Now compute trend relative to _lastValidV (= last buffered V after flush, or prior valid)
+            string trendS = double.IsNaN(_lastValidV) ? "—"
+                          : v > _lastValidV ? "UP"
+                          : v < _lastValidV ? "DOWN"
+                          : "—";
+
+            if (v >= _fromV && v <= _toV)
+            {
+                int matchNum = ++_matchCount;
+                var ctx2 = new List<RestSampleContext>(_confirmCtx.Count + _validHistory.Count + 1);
+                ctx2.AddRange(_confirmCtx);
+                ctx2.AddRange(_validHistory);
+                ctx2.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Match, v, trendS, matchNum));
+                _matchCtx   = ctx2;
+                _matchFile  = file;
+                _matchTs    = ts;
+                _matchTimeR = timeR;
+                _matchV     = v;
+                _lastValidV = v;
+                _state      = SState.WaitingPost;
+                Store(ts, timeR, v); return true;
+            }
+
+            _lastValidV = v;
+            _validHistory.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, trendS));
+            Store(ts, timeR, v); return true;
+        }
+
+        /// <summary>
+        /// Fires the callback for the current pending match, then transitions back
+        /// to Confirmed — adding the match to _validHistory for future context.
+        /// The post sample (if any) is deferred via _pendingPost so it can itself
+        /// become a match.
+        /// </summary>
+        private void FireAndContinue(RestSampleContext? post, string? cutReason)
+        {
+            if (_matchCtx == null) return;
+            var ctx = _matchCtx;
+            _matchCtx = null;
+
+            var zoomMatch = new RestZoomMatch(_matchFile, _matchTs, _matchTimeR, _matchV,
+                                              ctx, post, cutReason);
+            if (!_callback(zoomMatch)) { _stopped = true; }
+
+            // The match row becomes part of valid history for subsequent matches,
+            // preserving MatchNum so the zoom display can label it "prev match N"
+            var matchRow = ctx[^1];
+            _lastValidV = matchRow.V;
+            _validHistory.Add(new RestSampleContext(
+                matchRow.Ts, matchRow.TimeR, matchRow.GapMs,
+                SampleRole.Valid, matchRow.V, matchRow.Trend, matchRow.MatchNum));
+
+            _state = SState.Confirmed;
+            // Rewind _prev to match so pending-post gap is computed correctly
+            (_prevTs, _prevTimeR, _prevV) = (_matchTs, _matchTimeR, _matchV);
+        }
+
+        private string TrendStr(double v)
+            => double.IsNaN(_prevV) ? "—" : v > _prevV ? "UP" : v < _prevV ? "DOWN" : "—";
+
+        private void Store(long ts, string timeR, double v)
+            => (_prevTs, _prevTimeR, _prevV) = (ts, timeR, v);
+    }
+
     // ── STATE MACHINE ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -66,19 +351,35 @@ public static class RestAnalyzer
     {
         public const long GapThresholdMs = 800;  // gaps wider than this reset the machine
 
-        private enum State { Scanning, Confirmed }
+        private enum State { Scanning, PendingConfirm, Confirmed }
         private enum Trend { None, Up, Down }
 
-        private State  _state     = State.Scanning;
-        private Trend  _prevTrend = Trend.None;
-        private long   _prevTs    = -1;
-        private double _prevV     = double.NaN;
+        private State          _state      = State.Scanning;
+        private Trend          _prevTrend  = Trend.None;
+        private long           _prevTs     = -1;
+        private long           _pendingTs  = -1;  // timestamp of first flip; -1 when not in PendingConfirm
+        private double         _prevV      = double.NaN;
+        private readonly List<double> _pendingBuf = new(); // buffered UP samples in Confirmed state
+
+        private static readonly double[] _emptyDoubles = Array.Empty<double>();
 
         /// <summary>
-        /// Process one sample. Returns true if the voltage is valid confirmed-rest data.
+        /// After each Process() call, contains any voltages that were buffered as UP-pending
+        /// and are now retroactively valid because a DOWN flip reconfirmed rest.
+        /// Empty in all other cases.  Caller must add these to the valid list before the
+        /// current sample when Process() returns true.
+        /// </summary>
+        public double[] LastFlushed { get; private set; } = _emptyDoubles;
+
+        /// <summary>
+        /// Process one sample. Returns true if the current voltage is valid confirmed-rest data.
+        /// Check LastFlushed immediately after — it may contain additional valid voltages that
+        /// were buffered during a UP-pending period and are now retroactively confirmed.
         /// </summary>
         public bool Process(long ts, double v)
         {
+            LastFlushed = _emptyDoubles;
+
             // Very first sample — anchor state, not yet valid
             if (_prevTs < 0)
             {
@@ -95,14 +396,43 @@ public static class RestAnalyzer
                 return false;
             }
 
-            // In confirmed rest: accept all samples until a gap resets us
+            // In confirmed rest:
+            //   UP → buffer the sample (may become valid if DOWN flip arrives in time)
+            //   flat while buffering → buffer
+            //   DOWN after buffer → flush buffer as retroactively valid, current is valid
+            //   flat not buffering → valid
             if (_state == State.Confirmed)
             {
+                if (v > _prevV)                          // UP — buffer, not valid yet
+                {
+                    _pendingBuf.Add(v);
+                    Store(ts, v);
+                    return false;
+                }
+                if (v == _prevV && _pendingBuf.Count > 0) // flat while buffering — buffer
+                {
+                    _pendingBuf.Add(v);
+                    Store(ts, v);
+                    return false;
+                }
+                if (v < _prevV && _pendingBuf.Count > 0)  // DOWN reconfirm — flush buffer
+                {
+                    LastFlushed = _pendingBuf.ToArray();
+                    _pendingBuf.Clear();
+                    Store(ts, v);
+                    return true;
+                }
+                // flat not buffering, or DOWN with no buffer → valid as-is
                 Store(ts, v);
                 return true;
             }
 
-            // ── Scanning: looking for first direction flip ────────────────────
+            // PendingConfirm timeout: first flip was seen but second flip hasn't come in time
+            if (_state == State.PendingConfirm && ts - _pendingTs > GapThresholdMs)
+            {
+                Reset(ts, v);
+                return false;
+            }
 
             // Flat sample: no direction change, advance position without updating trend
             if (v == _prevV)
@@ -125,13 +455,20 @@ public static class RestAnalyzer
             _prevTrend   = newTrend;
             Store(ts, v);
 
-            if (flipped)
+            if (!flipped) return false;
+
+            if (_state == State.Scanning)
             {
-                _state = State.Confirmed;
-                return true;   // this sample is the first confirmed-rest sample
+                // First flip: enter PendingConfirm, wait for second flip within timeout
+                _state     = State.PendingConfirm;
+                _pendingTs = ts;
+                return false;
             }
 
-            return false;
+            // State == PendingConfirm: second flip within timeout → Confirmed
+            _state     = State.Confirmed;
+            _pendingTs = -1;
+            return true;   // this sample is the first confirmed-rest sample
         }
 
         private void Store(long ts, double v) { _prevTs = ts; _prevV = v; }
@@ -140,6 +477,8 @@ public static class RestAnalyzer
         {
             _state     = State.Scanning;
             _prevTrend = Trend.None;
+            _pendingTs = -1;
+            _pendingBuf.Clear();
             Store(ts, v);
         }
     }
@@ -175,7 +514,7 @@ public static class RestAnalyzer
         return fileName;
     }
 
-    private static IEnumerable<(long Ts, double V)> ReadSamples(string path)
+    private static IEnumerable<(long Ts, double V, string TimeR)> ReadSamples(string path)
     {
         using var fs     = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(fs);
@@ -195,7 +534,7 @@ public static class RestAnalyzer
                     System.Globalization.CultureInfo.InvariantCulture,
                     out double v)) continue;
 
-            yield return (ts, v);
+            yield return (ts, v, parts[0].Trim());
         }
     }
 }

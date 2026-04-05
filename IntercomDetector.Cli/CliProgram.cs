@@ -24,7 +24,10 @@ double maxDurMs     = 50000;
 long?   zoomFromMs   = null;
 long?   zoomToMs     = null;
 long?   zoomBucketMs = null;
-double? voltBucketV  = null;
+double? voltBucketV   = null;
+double? voltFromV     = null;
+double? voltToV       = null;
+int?    zoomStartMatch = null;
 
 for (int i = 1; i < args.Length; i++)
 {
@@ -34,8 +37,27 @@ for (int i = 1; i < args.Length; i++)
     if ((args[i] == "--event-end"   || args[i] == "-e") && i + 1 < args.Length) { eventEndV   = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
     if ((args[i] == "--gap"         || args[i] == "-g") && i + 1 < args.Length) { gapMs       = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
     if ((args[i] == "--max-dur"     || args[i] == "-m") && i + 1 < args.Length) { maxDurMs    = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); continue; }
-    if (args[i] == "--from"   && i + 1 < args.Length) { zoomFromMs   = long.Parse(args[++i]); continue; }
-    if (args[i] == "--to"     && i + 1 < args.Length) { zoomToMs     = long.Parse(args[++i]); continue; }
+    if (args[i] == "--from" && i + 1 < args.Length)
+    {
+        string fval = args[++i];
+        if (fval.Contains('.') && double.TryParse(fval, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double fV))
+            voltFromV = fV;
+        else
+            zoomFromMs = long.Parse(fval);
+        continue;
+    }
+    if (args[i] == "--to" && i + 1 < args.Length)
+    {
+        string tval = args[++i];
+        if (tval.Contains('.') && double.TryParse(tval, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double tV))
+            voltToV = tV;
+        else
+            zoomToMs = long.Parse(tval);
+        continue;
+    }
+    if (args[i] == "--match" && i + 1 < args.Length) { zoomStartMatch = int.Parse(args[++i]); continue; }
     if (args[i] == "--bucket" && i + 1 < args.Length)
     {
         string bval = args[++i];
@@ -79,8 +101,56 @@ if (subcommand == "analyze-rest")
     Console.WriteLine($"▶ Input files: {restFiles.Count} rest file(s)");
     Console.WriteLine();
 
-    var result = RestAnalyzer.Analyze(restFiles, voltBucketV);
-    PrintRestAnalysis(result);
+    var restResult = RestAnalyzer.Analyze(restFiles, voltBucketV);
+    PrintRestAnalysis(restResult);
+
+    if (voltFromV.HasValue && voltToV.HasValue)
+    {
+        const int W  = 82;
+        string dline = new string('═', W);
+        string line  = new string('─', W);
+
+        Console.WriteLine();
+        Console.Write("  Press ENTER to start zoom...");
+        Console.ReadLine();
+
+        Console.WriteLine(dline);
+        Console.WriteLine($"  REST ZOOM  [{voltFromV.Value:F3}V – {voltToV.Value:F3}V]");
+        Console.WriteLine(dline);
+
+        int matchNum = 0;
+        RestAnalyzer.StreamZoom(restFiles, voltFromV.Value, voltToV.Value, match =>
+        {
+            matchNum++;
+
+            // Skip printing until the requested start match; keep processing for context
+            if (zoomStartMatch.HasValue && matchNum < zoomStartMatch.Value)
+                return true;
+
+            if (matchNum > 1 && (!zoomStartMatch.HasValue || matchNum > zoomStartMatch.Value))
+                Console.WriteLine();
+            Console.WriteLine(dline);
+            Console.WriteLine($"  REST ZOOM  [{voltFromV.Value:F3}V – {voltToV.Value:F3}V]   match {matchNum}");
+            Console.WriteLine(dline);
+            Console.WriteLine($"  File    : {Path.GetFileName(match.File)}");
+            Console.WriteLine($"  Sample  : {match.MatchTimeR}   ts: {match.MatchTs}   {match.MatchV:F3}V");
+            Console.WriteLine();
+            Console.WriteLine(line);
+            Console.WriteLine("  CONTEXT");
+            Console.WriteLine(line);
+            PrintZoomContext(match);
+            Console.WriteLine(line);
+            Console.Write("  ENTER → siguiente   Q → salir  ");
+            string? key = Console.ReadLine();
+            return !(key?.Trim().Equals("q", StringComparison.OrdinalIgnoreCase) == true);
+        });
+
+        if (matchNum == 0)
+        {
+            Console.WriteLine("  No valid samples found in the specified voltage range.");
+            Console.WriteLine(dline);
+        }
+    }
     return;
 }
 
@@ -637,9 +707,9 @@ static void PrintRestAnalysis(RestAnalysisResult r)
     Console.WriteLine($"  Mean   : {s.Mean,9:F3}V  ±  {s.StdDev:F3}V (stddev)");
     Console.WriteLine();
     Console.WriteLine(line);
-    Console.WriteLine($"  VOLTAGE DISTRIBUTION  (bucket: {r.BucketWidthV:F3}V)");
+    Console.WriteLine($"  VALID SAMPLE DISTRIBUTION  (post-confirmation only · bucket: {r.BucketWidthV:F3}V)");
     Console.WriteLine(line);
-    PrintVoltageTable(r.Histogram, r.TotalSamples, r.BucketWidthV);
+    PrintVoltageTable(r.Histogram, r.ValidSamples, r.BucketWidthV);
     Console.WriteLine(dline);
 }
 
@@ -652,6 +722,8 @@ static void PrintVoltageTable(int[] histogram, int total, double bucketWidthV)
 
     int maxCount = histogram.Length > 0 ? histogram.Max() : 0;
 
+    Console.WriteLine($"  Total valid samples : {total:N0}");
+    Console.WriteLine();
     Console.WriteLine($"  {"FROM",9}   {"TO",9}   {"COUNT",12}   {"%",7}   DISTRIBUTION");
     Console.WriteLine($"  {"─────────",9}   {"─────────",9}   {"────────────",12}   {"───────",7}   ───────────────¦──────────────¦");
 
@@ -672,6 +744,151 @@ static void PrintVoltageTable(int[] histogram, int total, double bucketWidthV)
         Console.WriteLine($"{pre}  {from,9}   {to,9}   {count,12:N0}   {pctStr,7}   {bar}|{suf}");
     }
 }
+
+static void PrintZoomContext(RestZoomMatch match)
+{
+    bool   ansi    = !Console.IsOutputRedirected;
+    string cyan    = ansi ? "\x1b[96m\x1b[1m" : "";   // CONFIRM ►
+    string yellow  = ansi ? "\x1b[93m\x1b[1m" : "";   // ▶ match
+    string dimRed  = ansi ? "\x1b[91m"         : "";   // RESET
+    string magenta = ansi ? "\x1b[95m"         : "";   // flip ►
+    string anchor  = ansi ? "\x1b[33m"         : "";   // anchor
+    string green   = ansi ? "\x1b[32m"         : "";   // trend UP
+    string blue    = ansi ? "\x1b[94m"         : "";   // trend DOWN (bright blue)
+    string reset   = ansi ? "\x1b[0m"          : "";
+
+    Console.WriteLine($"  {"ts",-15}  {"timeR",-13}  {"gap",11}  {"role",-16}  {"voltage",8}  trend");
+    Console.WriteLine($"  {new string('─', 82)}");
+
+    PrintCollapsedRows(match.Context, ansi, cyan, yellow, dimRed, magenta, anchor, green, blue, reset);
+
+    if (match.PostSample != null)
+    {
+        var    s      = match.PostSample;
+        string gapStr = s.GapMs.HasValue ? FormatMsValue(s.GapMs.Value) : "—";
+        string trend  = ColorTrend(s.Trend, ansi, green, blue, reset);
+        Console.WriteLine($"  {s.Ts,-15}  {s.TimeR,-13}  {gapStr,11}  {"post",-16}  {s.V:F3}V        {trend}");
+    }
+    else if (match.PostCutReason != null)
+    {
+        Console.WriteLine($"  ∙ {match.PostCutReason}");
+    }
+}
+
+static void PrintCollapsedRows(List<RestSampleContext> rows, bool ansi,
+    string cyan, string yellow, string dimRed, string magenta, string anchor,
+    string green, string blue, string reset)
+{
+    int i = 0;
+    while (i < rows.Count)
+    {
+        var row = rows[i];
+
+        // Check for collapsible run (Scan/Anchor/Valid, same voltage, trend "—")
+        if (IsCollapsible(row))
+        {
+            int j = i + 1;
+            while (j < rows.Count && IsCollapsible(rows[j]) && rows[j].V == row.V)
+                j++;
+            int runLen = j - i;
+
+            // Always print first row of run normally
+            PrintZoomRow(row, ansi, cyan, yellow, dimRed, magenta, anchor, green, blue, reset);
+
+            if (runLen >= 3)
+            {
+                // Collapse remaining N-1 into one summary line with min/max gap.
+                // Use role of the second row (the collapsed ones), not the first.
+                var    last          = rows[j - 1];
+                var    collapsedRow  = rows[i + 1];
+                string cntStr       = $"⋯ ×{runLen - 1}";
+
+                long minGap = long.MaxValue, maxGap = long.MinValue;
+                for (int k = i + 1; k < j; k++)
+                {
+                    long? g = rows[k].GapMs;
+                    if (g.HasValue)
+                    {
+                        if (g.Value < minGap) minGap = g.Value;
+                        if (g.Value > maxGap) maxGap = g.Value;
+                    }
+                }
+                string gapRange = minGap == long.MaxValue ? "" :
+                    minGap == maxGap ? $"{minGap}ms" : $"{minGap}–{maxGap}ms";
+
+                Console.WriteLine($"  {cntStr,-15}  {last.TimeR,-13}  {gapRange,11}  {ZoomRoleLabel(collapsedRow),-16}  {row.V:F3}V        —");
+            }
+            else
+            {
+                for (int k = i + 1; k < j; k++)
+                    PrintZoomRow(rows[k], ansi, cyan, yellow, dimRed, magenta, anchor, green, blue, reset);
+            }
+
+            i = j;
+        }
+        else
+        {
+            PrintZoomRow(row, ansi, cyan, yellow, dimRed, magenta, anchor, green, blue, reset);
+            i++;
+        }
+    }
+}
+
+static bool IsCollapsible(RestSampleContext r)
+    => r.Trend == "—"
+    && r.Role is SampleRole.Scan or SampleRole.Anchor or SampleRole.Valid
+    && !r.MatchNum.HasValue;
+
+static void PrintZoomRow(RestSampleContext s, bool ansi,
+    string cyan, string yellow, string dimRed, string magenta, string anchorColor,
+    string green, string blue, string reset)
+{
+    string roleColor = s.Role switch
+    {
+        SampleRole.Match   => ansi ? yellow    : "",
+        SampleRole.Confirm => ansi ? cyan      : "",
+        SampleRole.Reset   => ansi ? dimRed    : "",
+        SampleRole.Flip    => ansi ? magenta   : "",
+        SampleRole.Anchor  => ansi ? anchorColor : "",
+        _                  => "",
+    };
+    string roleSuf  = roleColor.Length > 0 ? reset : "";
+    string gapStr   = s.GapMs.HasValue ? FormatMsValue(s.GapMs.Value) : "—";
+    string trend    = ColorTrend(s.Trend, ansi, green, blue, reset);
+
+    // For match/confirm/reset/flip/anchor rows: color the whole line.
+    // For other rows: color only the trend word.
+    if (roleColor.Length > 0)
+        Console.WriteLine($"{roleColor}  {s.Ts,-15}  {s.TimeR,-13}  {gapStr,11}  {ZoomRoleLabel(s),-16}  {s.V:F3}V        {s.Trend}{roleSuf}");
+    else
+        Console.WriteLine($"  {s.Ts,-15}  {s.TimeR,-13}  {gapStr,11}  {ZoomRoleLabel(s),-16}  {s.V:F3}V        {trend}");
+}
+
+static string ColorTrend(string trend, bool ansi, string green, string blue, string reset)
+{
+    if (!ansi) return trend;
+    return trend switch
+    {
+        "UP"   => $"{green}UP{reset}",
+        "DOWN" => $"{blue}DOWN{reset}",
+        _      => trend,
+    };
+}
+
+static string ZoomRoleLabel(RestSampleContext s) => s.Role switch
+{
+    SampleRole.Match                               => $"▶ match {s.MatchNum}",
+    SampleRole.Valid when s.MatchNum.HasValue      => $"prev match {s.MatchNum}",
+    SampleRole.Prev                                => "prev",
+    SampleRole.Reset                               => "RESET",
+    SampleRole.Anchor                              => "anchor",
+    SampleRole.Scan                                => "scan",
+    SampleRole.Flip                                => "flip ►",
+    SampleRole.Confirm                             => "CONFIRM ►",
+    SampleRole.Valid                               => "valid",
+    SampleRole.Post                                => "post",
+    _                                              => s.Role.ToString(),
+};
 
 static void PrintUsage()
 {
