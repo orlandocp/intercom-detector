@@ -110,13 +110,17 @@ if (subcommand == "analyze-rest")
         string dline = new string('═', W);
         string line  = new string('─', W);
 
+        // ── Configuration header + pause ─────────────────────────────────────
         Console.WriteLine();
-        Console.Write("  Press ENTER to start zoom...");
+        Console.WriteLine(dline);
+        Console.WriteLine($"  REST ZOOM");
+        Console.WriteLine($"  Range : {voltFromV.Value:F3}V – {voltToV.Value:F3}V");
+        if (zoomStartMatch.HasValue)
+            Console.WriteLine($"  Match : starting at {zoomStartMatch.Value}");
+        Console.WriteLine(dline);
+        Console.WriteLine();
+        Console.Write("  Press ENTER to start, Ctrl+C to cancel...");
         Console.ReadLine();
-
-        Console.WriteLine(dline);
-        Console.WriteLine($"  REST ZOOM  [{voltFromV.Value:F3}V – {voltToV.Value:F3}V]");
-        Console.WriteLine(dline);
 
         int matchNum = 0;
         RestAnalyzer.StreamZoom(restFiles, voltFromV.Value, voltToV.Value, match =>
@@ -129,18 +133,14 @@ if (subcommand == "analyze-rest")
 
             if (matchNum > 1 && (!zoomStartMatch.HasValue || matchNum > zoomStartMatch.Value))
                 Console.WriteLine();
-            Console.WriteLine(dline);
-            Console.WriteLine($"  REST ZOOM  [{voltFromV.Value:F3}V – {voltToV.Value:F3}V]   match {matchNum}");
-            Console.WriteLine(dline);
-            Console.WriteLine($"  File    : {Path.GetFileName(match.File)}");
-            Console.WriteLine($"  Sample  : {match.MatchTimeR}   ts: {match.MatchTs}   {match.MatchV:F3}V");
-            Console.WriteLine();
+
+            string fileName = Path.GetFileName(match.File);
             Console.WriteLine(line);
-            Console.WriteLine("  CONTEXT");
+            Console.WriteLine($"  match {matchNum}   {fileName}   {match.MatchTimeR}   ts: {match.MatchTs}   {match.MatchV:F3}V");
             Console.WriteLine(line);
             PrintZoomContext(match);
             Console.WriteLine(line);
-            Console.Write("  ENTER → siguiente   Q → salir  ");
+            Console.Write($"  File : {fileName}     ENTER → siguiente   Q → salir  ");
             string? key = Console.ReadLine();
             return !(key?.Trim().Equals("q", StringComparison.OrdinalIgnoreCase) == true);
         });
@@ -762,16 +762,61 @@ static void PrintZoomContext(RestZoomMatch match)
 
     PrintCollapsedRows(match.Context, ansi, cyan, yellow, dimRed, magenta, anchor, green, blue, reset);
 
-    if (match.PostSample != null)
-    {
-        var    s      = match.PostSample;
-        string gapStr = s.GapMs.HasValue ? FormatMsValue(s.GapMs.Value) : "—";
-        string trend  = ColorTrend(s.Trend, ansi, green, blue, reset);
-        Console.WriteLine($"  {s.Ts,-15}  {s.TimeR,-13}  {gapStr,11}  {"post",-16}  {s.V:F3}V        {trend}");
-    }
-    else if (match.PostCutReason != null)
+    PrintCollapsedPosts(match.PostSamples, match.MatchV, ansi, green, blue, reset);
+    if (match.PostCutReason != null)
     {
         Console.WriteLine($"  ∙ {match.PostCutReason}");
+    }
+}
+
+static void PrintCollapsedPosts(List<RestSampleContext> posts, double matchV,
+    bool ansi, string green, string blue, string reset)
+{
+    if (posts.Count == 0) return;
+
+    // Partition: leading same-voltage posts, then the (optional) different-voltage last post.
+    int sameCount = 0;
+    while (sameCount < posts.Count && posts[sameCount].V == matchV) sameCount++;
+    // posts[0..sameCount-1] are same voltage; posts[sameCount] (if exists) is different.
+
+    // Always print the first post fully.
+    var first = posts[0];
+    string firstGap   = first.GapMs.HasValue ? FormatMsValue(first.GapMs.Value) : "—";
+    string firstTrend = ColorTrend(first.Trend, ansi, green, blue, reset);
+    Console.WriteLine($"  {first.Ts,-15}  {first.TimeR,-13}  {firstGap,11}  {"post",-16}  {first.V:F3}V        {firstTrend}");
+
+    // Collapse the middle same-voltage posts (indices 1..sameCount-1) if there are 2+.
+    if (sameCount >= 3)
+    {
+        // Show first (done above), collapse 2..sameCount-1 (count = sameCount-1), display last of them.
+        int collapseCount = sameCount - 1;
+        var last = posts[sameCount - 1];
+        long minGap = long.MaxValue, maxGap = long.MinValue;
+        for (int k = 1; k < sameCount; k++)
+        {
+            long? g = posts[k].GapMs;
+            if (g.HasValue) { if (g.Value < minGap) minGap = g.Value; if (g.Value > maxGap) maxGap = g.Value; }
+        }
+        string gapRange = minGap == long.MaxValue ? "" :
+            minGap == maxGap ? $"{minGap}ms" : $"{minGap}–{maxGap}ms";
+        Console.WriteLine($"  {"⋯ ×" + collapseCount,-15}  {last.TimeR,-13}  {gapRange,11}  {"post",-16}  {last.V:F3}V        —");
+    }
+    else if (sameCount == 2)
+    {
+        // Only one more same-voltage post — print it fully.
+        var s2 = posts[1];
+        string g2 = s2.GapMs.HasValue ? FormatMsValue(s2.GapMs.Value) : "—";
+        Console.WriteLine($"  {s2.Ts,-15}  {s2.TimeR,-13}  {g2,11}  {"post",-16}  {s2.V:F3}V        —");
+    }
+
+    // Print the different-voltage post (if present) fully.
+    // Only when sameCount > 0: if sameCount == 0 the first post IS already the different-voltage one.
+    if (sameCount > 0 && sameCount < posts.Count)
+    {
+        var diff = posts[sameCount];
+        string dg   = diff.GapMs.HasValue ? FormatMsValue(diff.GapMs.Value) : "—";
+        string dt   = ColorTrend(diff.Trend, ansi, green, blue, reset);
+        Console.WriteLine($"  {diff.Ts,-15}  {diff.TimeR,-13}  {dg,11}  {"post",-16}  {diff.V:F3}V        {dt}");
     }
 }
 

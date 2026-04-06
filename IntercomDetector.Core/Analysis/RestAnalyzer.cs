@@ -95,8 +95,13 @@ public static class RestAnalyzer
         private double _lastValidV = double.NaN; // voltage of last sample added to _validHistory
         private int    _matchCount = 0;           // increments each time a match is fired
 
-        // Buffer for UP samples in Confirmed state (retroactively flushed to validHistory on DOWN flip)
-        private readonly List<RestSampleContext> _pendingBuf = new();
+        // Buffer for UP samples in Confirmed state (retroactively flushed on DOWN flip).
+        // Each entry keeps the source file so buffered matches can populate RestZoomMatch.File.
+        private readonly List<(string File, RestSampleContext Ctx)> _pendingBuf = new();
+
+        // Buffer for post samples accumulated in WaitingPost state (same-voltage samples
+        // following a match, until the first sample with a different voltage arrives).
+        private readonly List<RestSampleContext> _postBuf = new();
 
         // Scan segment buffer (RESET → anchor → scan… → CONFIRM)
         private readonly List<RestSampleContext> _segBuf = new();
@@ -146,7 +151,7 @@ public static class RestAnalyzer
                 ProcessSample(pp.File, pp.Ts, pp.TimeR, pp.V, pp.Ts - _prevTs);
             }
             if (!_stopped && _state == SState.WaitingPost)
-                FireAndContinue(post: null, cutReason: "end of file");
+                FireAndContinue(cutReason: "end of file");
             return !_stopped;
         }
 
@@ -159,6 +164,7 @@ public static class RestAnalyzer
             _state      = SState.Scanning;
             _pendingTs  = -1;
             _pendingBuf.Clear();
+            _postBuf.Clear();
             _lastValidV = double.NaN;
             _confirmCtx.Clear();
             _validHistory.Clear();
@@ -171,7 +177,7 @@ public static class RestAnalyzer
             if (gap > GapMs)
             {
                 if (_state == SState.WaitingPost)
-                    FireAndContinue(post: null, cutReason: $"gap > {GapMs}ms");
+                    FireAndContinue(cutReason: $"gap > {GapMs}ms");
 
                 ResetToScanning(ts, timeR, v, gap, $"gap > {GapMs}ms");
                 return !_stopped;
@@ -180,9 +186,18 @@ public static class RestAnalyzer
             // ── WaitingPost ───────────────────────────────────────────────────
             if (_state == SState.WaitingPost)
             {
-                var postCtx = new RestSampleContext(ts, timeR, gap, SampleRole.Post, v, TrendStr(v));
-                FireAndContinue(post: postCtx, cutReason: null);
+                if (v == _matchV)
+                {
+                    // Same voltage as match — keep accumulating posts
+                    _postBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Post, v, TrendStr(v)));
+                    Store(ts, timeR, v);
+                    return true;
+                }
+                // Voltage changed — this is the last post; fire and defer for re-evaluation
+                _postBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Post, v, TrendStr(v)));
+                FireAndContinue(cutReason: null);
                 // Defer this sample for re-evaluation as a potential next match
+                // (do NOT call Store here — _prevTs already points to last accumulated post)
                 _pendingPost = (ts, timeR, v, file);
                 return !_stopped;
             }
@@ -248,25 +263,21 @@ public static class RestAnalyzer
 
             if (v > _prevV)                              // UP — buffer, not valid yet
             {
-                _pendingBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, TrendStr(v)));
+                _pendingBuf.Add((file, new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, TrendStr(v))));
                 Store(ts, timeR, v); return true;
             }
 
             if (v == _prevV && _pendingBuf.Count > 0)    // flat while buffering — buffer
             {
-                _pendingBuf.Add(new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, "—"));
+                _pendingBuf.Add((file, new RestSampleContext(ts, timeR, gap, SampleRole.Valid, v, "—")));
                 Store(ts, timeR, v); return true;
             }
 
-            // DOWN reconfirm or flat-not-buffering: flush pending buffer to validHistory
+            // DOWN reconfirm or flat-not-buffering: flush pending buffer, checking each for match
             if (_pendingBuf.Count > 0)
             {
-                foreach (var ctx in _pendingBuf)
-                {
-                    _lastValidV = ctx.V;
-                    _validHistory.Add(ctx);
-                }
-                _pendingBuf.Clear();
+                FlushPendingBuf(file, ts, timeR, v, gap);
+                if (_stopped) return false;
             }
 
             // Now compute trend relative to _lastValidV (= last buffered V after flush, or prior valid)
@@ -298,19 +309,79 @@ public static class RestAnalyzer
         }
 
         /// <summary>
-        /// Fires the callback for the current pending match, then transitions back
-        /// to Confirmed — adding the match to _validHistory for future context.
-        /// The post sample (if any) is deferred via _pendingPost so it can itself
+        /// Iterates the UP-pending buffer and flushes each entry to _validHistory.
+        /// Entries whose voltage falls within [_fromV, _toV] are fired as matches inline,
+        /// with the next buffer entry (or the triggering DOWN reconfirm sample) as the post.
+        /// </summary>
+        private void FlushPendingBuf(string reconfirmFile, long reconfirmTs, string reconfirmTimeR,
+                                     double reconfirmV, long reconfirmGap)
+        {
+            for (int i = 0; i < _pendingBuf.Count && !_stopped; i++)
+            {
+                var (bufFile, ctx) = _pendingBuf[i];
+
+                if (ctx.V >= _fromV && ctx.V <= _toV)
+                {
+                    int matchNum = ++_matchCount;
+
+                    // Collect post samples: same-voltage buffer entries after the match,
+                    // then the first different-voltage entry (or DOWN reconfirm when buffer runs out).
+                    var postSamples = new List<RestSampleContext>();
+                    bool foundDiffV = false;
+                    for (int j = i + 1; j < _pendingBuf.Count && !foundDiffV; j++)
+                    {
+                        var nextCtx = _pendingBuf[j].Ctx;
+                        postSamples.Add(new RestSampleContext(nextCtx.Ts, nextCtx.TimeR, nextCtx.GapMs,
+                                                             SampleRole.Post, nextCtx.V, nextCtx.Trend));
+                        if (nextCtx.V != ctx.V) foundDiffV = true;
+                    }
+                    if (!foundDiffV)
+                    {
+                        string rcTrend = reconfirmV < ctx.V ? "DOWN" : reconfirmV > ctx.V ? "UP" : "—";
+                        postSamples.Add(new RestSampleContext(reconfirmTs, reconfirmTimeR, reconfirmGap,
+                                                             SampleRole.Post, reconfirmV, rcTrend));
+                    }
+
+                    var matchCtx = new List<RestSampleContext>(_confirmCtx.Count + _validHistory.Count + 1);
+                    matchCtx.AddRange(_confirmCtx);
+                    matchCtx.AddRange(_validHistory);
+                    matchCtx.Add(new RestSampleContext(ctx.Ts, ctx.TimeR, ctx.GapMs,
+                                                      SampleRole.Match, ctx.V, ctx.Trend, matchNum));
+
+                    var zoomMatch = new RestZoomMatch(bufFile, ctx.Ts, ctx.TimeR, ctx.V,
+                                                     matchCtx, postSamples, null);
+                    if (!_callback(zoomMatch)) { _stopped = true; }
+
+                    _lastValidV = ctx.V;
+                    _validHistory.Add(new RestSampleContext(ctx.Ts, ctx.TimeR, ctx.GapMs,
+                                                           SampleRole.Valid, ctx.V, ctx.Trend, matchNum));
+                }
+                else
+                {
+                    _lastValidV = ctx.V;
+                    _validHistory.Add(ctx);
+                }
+            }
+            _pendingBuf.Clear();
+        }
+
+        /// <summary>
+        /// Fires the callback for the current pending match with all accumulated post samples,
+        /// then transitions back to Confirmed — adding the match to _validHistory for future context.
+        /// The triggering different-voltage sample is deferred via _pendingPost so it can itself
         /// become a match.
         /// </summary>
-        private void FireAndContinue(RestSampleContext? post, string? cutReason)
+        private void FireAndContinue(string? cutReason)
         {
             if (_matchCtx == null) return;
             var ctx = _matchCtx;
             _matchCtx = null;
 
+            var postSamples = new List<RestSampleContext>(_postBuf);
+            _postBuf.Clear();
+
             var zoomMatch = new RestZoomMatch(_matchFile, _matchTs, _matchTimeR, _matchV,
-                                              ctx, post, cutReason);
+                                              ctx, postSamples, cutReason);
             if (!_callback(zoomMatch)) { _stopped = true; }
 
             // The match row becomes part of valid history for subsequent matches,
@@ -322,8 +393,8 @@ public static class RestAnalyzer
                 SampleRole.Valid, matchRow.V, matchRow.Trend, matchRow.MatchNum));
 
             _state = SState.Confirmed;
-            // Rewind _prev to match so pending-post gap is computed correctly
-            (_prevTs, _prevTimeR, _prevV) = (_matchTs, _matchTimeR, _matchV);
+            // NOTE: _prevTs/_prevV is already correct — either still at matchTs (no same-voltage
+            // posts were buffered) or updated by Store() for each accumulated same-voltage post.
         }
 
         private string TrendStr(double v)

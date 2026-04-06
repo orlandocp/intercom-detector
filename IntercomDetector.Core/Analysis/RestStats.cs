@@ -23,9 +23,12 @@ public record RestZoomMatch(
     double                  MatchV,
     /// <summary>Full context: prev? → RESET → anchor → scan… → CONFIRM → valid… → MATCH.</summary>
     List<RestSampleContext>  Context,
-    /// <summary>The 1 post sample, or null if cut by gap/eof.</summary>
-    RestSampleContext?       PostSample,
-    /// <summary>Non-null when PostSample is null: reason for the cut.</summary>
+    /// <summary>
+    /// Post samples: same-voltage samples immediately following the match (if any),
+    /// plus the first sample whose voltage differs.  Empty when cut by gap or eof.
+    /// </summary>
+    List<RestSampleContext>  PostSamples,
+    /// <summary>Non-null when PostSamples is empty: reason for the cut (gap / end of file).</summary>
     string?                  PostCutReason
 );
 
