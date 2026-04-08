@@ -191,6 +191,7 @@ if (subcommand == "analyze-event")
 
     var result = EventAnalyzer.Analyze(eventFiles, zoomFromMs, zoomToMs, zoomBucketMs);
     PrintEventAnalysis(result);
+    PrintOnsetAnalysis(eventFiles);
     return;
 }
 
@@ -934,6 +935,66 @@ static string ZoomRoleLabel(RestSampleContext s) => s.Role switch
     SampleRole.Post                                => "post",
     _                                              => s.Role.ToString(),
 };
+
+static void PrintOnsetAnalysis(List<string> eventFiles)
+{
+    // ── Resolve events_log files (IO concern stays in CLI) ────────────────────
+    string eventsDir   = Path.GetDirectoryName(Path.GetFullPath(eventFiles[0])) ?? "";
+    string capturesDir = Path.GetDirectoryName(eventsDir) ?? eventsDir;
+
+    var logFiles = Directory.GetFiles(capturesDir, "events_*.csv").OrderBy(f => f).ToList();
+    if (logFiles.Count == 0)
+        logFiles = Directory.GetFiles(eventsDir, "events_*.csv").OrderBy(f => f).ToList();
+
+    if (logFiles.Count == 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("  ⚠  No events_*.csv log files found — skipping onset analysis.");
+        return;
+    }
+
+    var result = OnsetAnalyzer.Analyze(eventFiles, logFiles);
+
+    // ── Print ─────────────────────────────────────────────────────────────────
+    string dline = new string('═', 82);
+    string line  = new string('─', 82);
+
+    int nR = result.Groups.FirstOrDefault(g => g.Label == "r")?.Count ?? 0;
+    int nV = result.Groups.FirstOrDefault(g => g.Label == "v")?.Count ?? 0;
+    int nC = result.Groups.FirstOrDefault(g => g.Label == "c")?.Count ?? 0;
+
+    Console.WriteLine();
+    Console.WriteLine(dline);
+    Console.WriteLine($"  ONSET ANALYSIS — V[1]: voltage at first event sample (~50ms detection)");
+    Console.WriteLine($"  Matched: r={nR}  v={nV}  c={nC}  skipped={result.Skipped}");
+    Console.WriteLine(dline);
+
+    if (result.Groups.Count == 0)
+    {
+        Console.WriteLine("  No labeled events matched.");
+        return;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("  mean = promedio de todos los valores · σ = desviación estándar (qué tan dispersos están los valores respecto al mean)");
+    Console.WriteLine();
+    Console.WriteLine($"  {"grp",-5}  {"n",4}  {"V[0] mean",11}  {"V[1] min",10}  {"V[1] max",10}  {"V[1] mean",11}  {"V[1] σ",8}  {"rise gap",10}");
+    Console.WriteLine($"  {line}");
+
+    foreach (var g in result.Groups)
+        Console.WriteLine($"  {g.Label,-5}  {g.Count,4}  {g.V0Mean,9:F3}V    {g.V1Min,8:F2}V    {g.V1Max,8:F2}V    {g.V1Mean,9:F2}V    {g.V1StdDev,6:F2}V    {g.RiseGapMeanMs,7:F0}ms");
+
+    Console.WriteLine();
+    Console.WriteLine($"  THRESHOLD SWEEP on V[1]  (rule: V[1] >= T → alarm)");
+    Console.WriteLine($"  {"T",6}  {"r ≥ T",8}  {"v ≥ T",8}  {"c ≥ T",8}    {"r%",5}  {"v%",5}  {"c%",5}");
+    Console.WriteLine($"  {new string('─', 55)}");
+
+    foreach (var pt in result.ThresholdSweep)
+        Console.WriteLine($"  {pt.Threshold,5:F1}V  {pt.RAbove,4}/{pt.NR,-3}  {pt.VAbove,4}/{pt.NV,-3}  {pt.CAbove,4}/{pt.NC,-3}    {pt.RPct,4:F0}%  {pt.VPct,4:F0}%  {pt.CPct,4:F0}%");
+
+    Console.WriteLine($"  {new string('─', 55)}");
+    Console.WriteLine();
+}
 
 static void PrintUsage()
 {
